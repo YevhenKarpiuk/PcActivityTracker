@@ -1,7 +1,8 @@
 ## Build artifacts
 bin/
 obj/
-release/
+release/*
+!release/PcActivityTracker-portable-win-x64.zip
 dist/
 build/
 node_modules/
