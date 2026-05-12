@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Launch PcActivityTracker",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/PcActivityTracker.App/bin/Debug/net10.0-windows10.0.19041.0/PcActivityTracker.App.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}/src/PcActivityTracker.App",
+      "stopAtEntry": false
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+## Build artifacts
+bin/
+obj/
+release/
+dist/
+build/
+node_modules/
+
+## IDE and local editor state
+.vs/
+.idea/
+.vscode/settings.json
+*.user
+*.suo
+
+## Logs
+*.log
+restore*.log
+
+## Local .NET cache/home used by VS Code tasks
+.dotnet-home/
+
+## Runtime data and exports
+exports/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+
+## Environment and secrets
+.env
+.env.*
+*.env
+*.pfx
+*.pem
+*.key
+
+## Backups / dumps / potentially private enterprise files
+*.bak
+*.backup
+*.sql
+*.dt
+*.cf
+*.epf
+*.erf
+
+## OS artifacts
+Thumbs.db
+.DS_Store
