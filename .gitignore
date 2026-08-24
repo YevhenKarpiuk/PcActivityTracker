@@ -1,0 +1,14 @@
+build/
+out/
+.vscode/.cache/
+*.db
+*.db-wal
+*.db-shm
+settings.json
+settings.json.tmp
+settings.json.corrupt.*
+.DS_Store
+
+settings.json.corrupt
+settings.json.bak
+settings.json.tmp
