@@ -11,7 +11,7 @@ namespace pcat {
 namespace { constexpr auto checkpointInterval = std::chrono::seconds(30); }
 
 ActivityMonitor::ActivityMonitor(IActivityProvider& provider,IActivityRepository& repository,AppSettings settings)
-    :provider_(provider),repository_(repository),settings_(std::move(settings)){}
+    :provider_(provider),repository_(repository),settings_(std::move(settings)),categoryIndex_(buildCategoryIndex(settings_.categories)){}
 ActivityMonitor::~ActivityMonitor() noexcept { stop(); }
 
 void ActivityMonitor::start(){
@@ -64,7 +64,7 @@ bool ActivityMonitor::pauseAndFlushForMaintenance() noexcept {
         return false;
     }
 }
-void ActivityMonitor::setSettings(const AppSettings& settings){std::scoped_lock lock(mutex_);settings_=settings;}
+void ActivityMonitor::setSettings(const AppSettings& settings){std::scoped_lock lock(mutex_);settings_=settings;categoryIndex_=buildCategoryIndex(settings_.categories);}
 void ActivityMonitor::setRecordCallback(RecordCallback cb){std::scoped_lock lock(mutex_);callback_=std::move(cb);}
 std::string ActivityMonitor::lastError() const { std::scoped_lock lock(mutex_);return lastError_; }
 void ActivityMonitor::setError(std::string message){std::scoped_lock lock(mutex_);lastError_=std::move(message);}
@@ -98,7 +98,9 @@ void ActivityMonitor::process(){
     snapshot.isIdle=snapshot.idleSeconds>=std::max(10,settings.idleThresholdSeconds);
     if(isExcluded(snapshot,settings)){closeCurrent(snapshot.timestamp);return;}
     if(settings.hideBrowserWindowTitles&&isBrowserProcess(snapshot.processName)){snapshot.windowTitle=snapshot.browserDomain.empty()?"Браузер":"Браузер: "+snapshot.browserDomain;snapshot.browserUrl.clear();}
-    const auto category=resolveCategory(snapshot.processName,settings.categories);
+    // Индекс живёт в мониторе и пересчитывается только при смене настроек, поэтому здесь
+    // достаточно короткой блокировки и одного поиска вместо линейного обхода карты категорий.
+    std::string category;{std::scoped_lock lock(mutex_);category=resolveCategory(snapshot.processName,categoryIndex_);}
 
     bool transitioned=false;
     {

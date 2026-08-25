@@ -12,6 +12,16 @@ option(PCAT_BUILD_TESTS "Build unit tests" ON)
 option(PCAT_FETCH_DEPS "Fetch GUI dependencies with CMake" ON)
 option(PCAT_STRICT_WARNINGS "Treat warnings in PcActivityTracker sources as errors" OFF)
 
+# Тесты построены на assert(), а Release определяет NDEBUG и вырезает их целиком.
+# Без этого ctest в Release-пресете рапортует об успехе, фактически ничего не проверив.
+function(pcat_enable_assertions target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(${target} PRIVATE -UNDEBUG)
+    endif()
+endfunction()
+
 function(pcat_target_warnings target)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8)
@@ -104,7 +114,11 @@ if(PCAT_BUILD_APP)
         src/main.cpp
         src/ui/App.cpp
         src/ui/ReportView.cpp
+        src/ui/TrayIcon.cpp
     )
+    # Единственный источник правды для идентификатора иконки: подставляется и в .rc,
+    # и в C++, который забирает её через LoadImage для окна и трея.
+    set(PCAT_ICON_RESOURCE_ID 101)
     if(WIN32)
         enable_language(RC)
         file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/assets/PcActivityTracker.ico" PCAT_ICON_PATH)
@@ -123,6 +137,9 @@ if(PCAT_BUILD_APP)
     )
     if(WIN32)
         set_target_properties(PcActivityTracker PROPERTIES WIN32_EXECUTABLE TRUE)
+        target_compile_definitions(PcActivityTracker PRIVATE PCAT_ICON_RESOURCE_ID=${PCAT_ICON_RESOURCE_ID})
+        # user32/gdi32 нужны TrayIcon.cpp для LoadImage/GetIconInfo/GetDIBits.
+        target_link_libraries(PcActivityTracker PRIVATE user32 gdi32)
     endif()
     pcat_target_warnings(PcActivityTracker)
 endif()
@@ -132,15 +149,18 @@ if(PCAT_BUILD_TESTS)
     add_executable(test_core tests/test_core.cpp)
     target_link_libraries(test_core PRIVATE pcat_core)
     pcat_target_warnings(test_core)
+    pcat_enable_assertions(test_core)
     add_test(NAME core COMMAND test_core)
     add_executable(test_reports tests/test_reports.cpp)
     target_link_libraries(test_reports PRIVATE pcat_reports)
     pcat_target_warnings(test_reports)
+    pcat_enable_assertions(test_reports)
     add_test(NAME reports COMMAND test_reports)
     if(TARGET pcat_data)
         add_executable(test_data tests/test_data.cpp)
         target_link_libraries(test_data PRIVATE pcat_data)
         pcat_target_warnings(test_data)
+        pcat_enable_assertions(test_data)
         add_test(NAME data COMMAND test_data)
     endif()
 endif()

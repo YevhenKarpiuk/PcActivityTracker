@@ -171,26 +171,24 @@ CMake скачивает зафиксированные версии:
 
 Иконка и версия приложения встраиваются в `.exe` через Windows resource compiler (`windres`).
 
-## 7. Portable mode
+## 7. Где лежат данные
 
-Рядом с `PcActivityTracker.exe` создайте:
-
-```text
-portable.txt
-```
-
-Тогда:
+По умолчанию — в каталоге самой программы:
 
 ```text
-data\activity_tracker.db
-data\settings.json
+<каталог с exe>\data\activity_tracker.db
+<каталог с exe>\data\settings.json
 ```
 
-Без portable mode используется:
+Порядок выбора:
 
-```text
-%LOCALAPPDATA%\PcActivityTracker
-```
+1. `portable.txt` рядом с `.exe` или уже существующие данные в `data\` — безусловный приоритет;
+2. `<каталог с exe>\data`, если каталог доступен на запись;
+3. `%LOCALAPPDATA%\PcActivityTracker` — только когда писать рядом с программой нельзя
+   (`Program Files`, read-only носитель, сетевой ресурс).
+
+Portable-архив содержит `portable.txt`, поэтому режим в нём зафиксирован явно и не зависит
+от прав на каталог.
 
 ## 8. Если сборка не прошла
 

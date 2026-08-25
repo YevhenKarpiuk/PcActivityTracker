@@ -1,6 +1,10 @@
 #include "platform/Autostart.h"
 #ifdef _WIN32
+// libstdc++ на MinGW уже задаёт NOMINMAX=1 из bits/os_defines.h, поэтому определять его
+// безусловно нельзя: получается конфликтующее переопределение.
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 namespace pcat {
 bool setAutostart(bool enabled,const std::filesystem::path& executablePath,std::string& error){

@@ -2,16 +2,32 @@
 #include "core/TextUtil.h"
 
 namespace pcat {
+namespace {
+constexpr const char* kNoCategory = "Без категории";
+}
+
 std::string normalizeProcessName(std::string value) {
     return textutil::utf8CaseFold(textutil::fileNameCrossPlatform(value));
 }
 
-std::string resolveCategory(const std::string& processName,
-                            const std::map<std::string,std::string,std::less<>>& categories) {
-    const auto key = textutil::canonicalApplicationId(processName);
+CategoryIndex buildCategoryIndex(const CategoryMap& categories) {
+    CategoryIndex index;
     for (const auto& [candidate, category] : categories) {
-        if (textutil::canonicalApplicationId(candidate) == key) return category;
+        auto key = textutil::canonicalApplicationId(candidate);
+        if (key.empty()) continue;
+        // Первое совпадение выигрывает, как и в прежнем линейном поиске по упорядоченной карте.
+        index.byApplicationId.emplace(std::move(key), category);
     }
-    return "Без категории";
+    return index;
+}
+
+std::string resolveCategory(const std::string& processName, const CategoryIndex& index) {
+    const auto key = textutil::canonicalApplicationId(processName);
+    const auto found = index.byApplicationId.find(key);
+    return found != index.byApplicationId.end() ? found->second : kNoCategory;
+}
+
+std::string resolveCategory(const std::string& processName, const CategoryMap& categories) {
+    return resolveCategory(processName, buildCategoryIndex(categories));
 }
 }

@@ -150,20 +150,23 @@ Ninja, флаги `-Wall -Wextra -Wpedantic -Werror`:
 
 ## Portable mode
 
-Создайте рядом с `.exe`:
+**По умолчанию боевая база и настройки лежат в каталоге самой программы:**
 
 ```text
-portable.txt
+<каталог с exe>\data\activity_tracker.db
+<каталог с exe>\data\settings.json
 ```
 
-Данные будут храниться в:
+Порядок выбора каталога данных ([AppStoragePaths.cpp](src/data/AppStoragePaths.cpp)):
 
-```text
-data\activity_tracker.db
-data\settings.json
-```
+1. `portable.txt` рядом с `.exe` либо уже существующие `data\activity_tracker.db`/`data\settings.json` —
+   безусловный приоритет, чтобы обновление никогда не теряло историю;
+2. `<каталог с exe>\data`, если туда физически можно писать — обычный режим;
+3. `%LOCALAPPDATA%\PcActivityTracker` — только если каталог программы недоступен на запись
+   (установка в `Program Files`, read-only носитель, сетевой ресурс).
 
-Без `portable.txt` Windows использует `%LOCALAPPDATA%\PcActivityTracker`.
+Экспорт истории и отчётов (`history.csv/json`, `report.csv/json`) складывается в тот же каталог
+данных, а не в текущий каталог процесса; полный путь показывается в статусной строке.
 
 ## Структура
 

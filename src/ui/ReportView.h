@@ -4,6 +4,7 @@
 #include "reports/ReportTypes.h"
 
 #include <array>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <vector>
@@ -11,6 +12,9 @@
 namespace pcat {
 class ReportView {
 public:
+    // Каталог для CSV/JSON выгрузок. Без него экспорт ушёл бы в текущий каталог процесса,
+    // который у GUI-приложения не совпадает с каталогом программы.
+    void setExportDirectory(std::filesystem::path directory){exportDirectory_=std::move(directory);}
     void draw(IActivityRepository& repository,const std::optional<ActivityRecord>& liveRecord);
 private:
     enum class ChartType { Bars, Line, Pie };
@@ -28,6 +32,7 @@ private:
     std::array<char,256> titleFilter_{};
     Metric chartMetric_{Metric::TotalSeconds};
     ChartType chartType_{ChartType::Bars};
+    std::filesystem::path exportDirectory_;
     std::string status_;
     void initialize();
     void rebuild(IActivityRepository& repository,const std::optional<ActivityRecord>& liveRecord);

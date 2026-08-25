@@ -189,45 +189,52 @@ const JsonValue* find(const JsonObject& o, std::initializer_list<const char*> ke
     for (const auto* key : keys) { auto it=o.find(key); if (it!=o.end()) return &it->second; }
     return nullptr;
 }
-std::optional<int> getInt(const JsonObject& o, std::initializer_list<const char*> keys) {
+// Ошибка типа в одном поле — это не повреждение файла. Такое поле пропускается со
+// значением по умолчанию, а не приводит к перезаписи всех настроек пользователя.
+void warnField(std::vector<std::string>& warnings, std::initializer_list<const char*> keys, const char* expected) {
+    warnings.push_back(std::string(*keys.begin()) + ": ожидалось " + expected + ", значение проигнорировано");
+}
+
+std::optional<int> getInt(const JsonObject& o, std::initializer_list<const char*> keys, std::vector<std::string>& warnings) {
     const auto* v=find(o,keys);
     if (!v) return std::nullopt;
     const auto* n=asNumber(*v);
     if (!n || !std::isfinite(*n) || std::trunc(*n) != *n
         || *n < static_cast<double>(std::numeric_limits<int>::min())
         || *n > static_cast<double>(std::numeric_limits<int>::max())) {
-        throw std::runtime_error("settings.json: expected integer value");
+        warnField(warnings, keys, "целое число");
+        return std::nullopt;
     }
     return static_cast<int>(*n);
 }
-std::optional<bool> getBool(const JsonObject& o, std::initializer_list<const char*> keys) {
+std::optional<bool> getBool(const JsonObject& o, std::initializer_list<const char*> keys, std::vector<std::string>& warnings) {
     const auto* v=find(o,keys);
     if (!v) return std::nullopt;
     const auto* b=asBool(*v);
-    if (!b) throw std::runtime_error("settings.json: expected boolean value");
+    if (!b) { warnField(warnings, keys, "true или false"); return std::nullopt; }
     return *b;
 }
-std::optional<std::vector<std::string>> getStringArray(const JsonObject& o, std::initializer_list<const char*> keys) {
+std::optional<std::vector<std::string>> getStringArray(const JsonObject& o, std::initializer_list<const char*> keys, std::vector<std::string>& warnings) {
     const auto* v=find(o,keys); if (!v) return std::nullopt;
     const auto* a=asArray(*v);
-    if (!a) throw std::runtime_error("settings.json: expected string array");
+    if (!a) { warnField(warnings, keys, "массив строк"); return std::nullopt; }
     std::vector<std::string> result;
     result.reserve(a->size());
     for (const auto& item:*a) {
         const auto* s=asString(item);
-        if (!s) throw std::runtime_error("settings.json: array contains a non-string item");
+        if (!s) { warnField(warnings, keys, "массив строк без посторонних значений"); return std::nullopt; }
         result.push_back(*s);
     }
     return result;
 }
-std::optional<std::map<std::string,std::string,std::less<>>> getStringMap(const JsonObject& o, std::initializer_list<const char*> keys) {
+std::optional<std::map<std::string,std::string,std::less<>>> getStringMap(const JsonObject& o, std::initializer_list<const char*> keys, std::vector<std::string>& warnings) {
     const auto* v=find(o,keys); if (!v) return std::nullopt;
     const auto* m=asObject(*v);
-    if (!m) throw std::runtime_error("settings.json: expected object of strings");
+    if (!m) { warnField(warnings, keys, "объект вида приложение-категория"); return std::nullopt; }
     std::map<std::string,std::string,std::less<>> result;
     for (const auto& [k,item]:*m) {
         const auto* s=asString(item);
-        if (!s) throw std::runtime_error("settings.json: categories contain a non-string value");
+        if (!s) { warnField(warnings, keys, "строковые значения категорий"); return std::nullopt; }
         result[k]=*s;
     }
     return result;
@@ -296,6 +303,7 @@ SettingsService::SettingsService(std::filesystem::path path):path_(std::move(pat
 
 AppSettings SettingsService::load() {
     AppSettings settings;
+    warnings_.clear();
     recoverBackupIfNeeded(path_);
     if(!std::filesystem::exists(path_)){save(settings);return settings;}
     if(!std::filesystem::is_regular_file(path_))throw std::runtime_error("settings.json is not a regular file");
@@ -306,15 +314,15 @@ AppSettings SettingsService::load() {
         if(text.empty()) throw std::runtime_error("empty settings");
         if(text.size()>=3&&static_cast<unsigned char>(text[0])==0xEF&&static_cast<unsigned char>(text[1])==0xBB&&static_cast<unsigned char>(text[2])==0xBF)text.erase(0,3);
         const auto root=JsonParser(text).parse(); const auto* object=asObject(root); if(!object) throw std::runtime_error("settings root is not an object");
-        if(auto v=getInt(*object,{"IdleThresholdSeconds","idleThresholdSeconds"}))settings.idleThresholdSeconds=*v;
-        if(auto v=getInt(*object,{"PollingIntervalSeconds","pollingIntervalSeconds"}))settings.pollingIntervalSeconds=*v;
-        if(auto v=getBool(*object,{"HideBrowserWindowTitles","hideBrowserWindowTitles"}))settings.hideBrowserWindowTitles=*v;
-        if(auto v=getBool(*object,{"StartWithSystem","StartWithWindows","startWithSystem"}))settings.startWithSystem=*v;
-        if(auto a=getStringArray(*object,{"ExcludedProcesses","excludedProcesses"}))settings.excludedProcesses=std::move(*a);
-        if(auto a=getStringArray(*object,{"ExcludedWindowTitles","excludedWindowTitles"}))settings.excludedWindowTitles=std::move(*a);
-        if(auto a=getStringArray(*object,{"ExcludedWindowTitlePatterns","excludedWindowTitlePatterns"}))settings.excludedWindowTitlePatterns=std::move(*a);
-        if(auto a=getStringArray(*object,{"ExcludedBrowserDomains","excludedBrowserDomains"}))settings.excludedBrowserDomains=std::move(*a);
-        if(auto m=getStringMap(*object,{"Categories","categories"}))settings.categories=std::move(*m);
+        if(auto v=getInt(*object,{"IdleThresholdSeconds","idleThresholdSeconds"},warnings_))settings.idleThresholdSeconds=*v;
+        if(auto v=getInt(*object,{"PollingIntervalSeconds","pollingIntervalSeconds"},warnings_))settings.pollingIntervalSeconds=*v;
+        if(auto v=getBool(*object,{"HideBrowserWindowTitles","hideBrowserWindowTitles"},warnings_))settings.hideBrowserWindowTitles=*v;
+        if(auto v=getBool(*object,{"StartWithSystem","StartWithWindows","startWithSystem"},warnings_))settings.startWithSystem=*v;
+        if(auto a=getStringArray(*object,{"ExcludedProcesses","excludedProcesses"},warnings_))settings.excludedProcesses=std::move(*a);
+        if(auto a=getStringArray(*object,{"ExcludedWindowTitles","excludedWindowTitles"},warnings_))settings.excludedWindowTitles=std::move(*a);
+        if(auto a=getStringArray(*object,{"ExcludedWindowTitlePatterns","excludedWindowTitlePatterns"},warnings_))settings.excludedWindowTitlePatterns=std::move(*a);
+        if(auto a=getStringArray(*object,{"ExcludedBrowserDomains","excludedBrowserDomains"},warnings_))settings.excludedBrowserDomains=std::move(*a);
+        if(auto m=getStringMap(*object,{"Categories","categories"},warnings_))settings.categories=std::move(*m);
         normalize(settings); return settings;
     } catch (...) {
         try { auto corrupt=path_;corrupt += ".corrupt";std::filesystem::copy_file(path_,corrupt,std::filesystem::copy_options::overwrite_existing); } catch (...) {}

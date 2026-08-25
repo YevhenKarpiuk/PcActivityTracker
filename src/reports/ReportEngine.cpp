@@ -159,8 +159,14 @@ std::string weekday(const std::tm& time) {
     return names[index];
 }
 
-std::string keyFor(GroupField field, const ActivityRecord& record, std::chrono::system_clock::time_point point) {
-    const auto local = timeutil::localTm(point);
+bool needsLocalTime(GroupField field) {
+    return field == GroupField::Day || field == GroupField::Weekday || field == GroupField::Hour;
+}
+
+// localTm() выполняет localtime_s с блокировкой и чтением timezone, поэтому вызывать его
+// на каждое поле группировки нельзя: он нужен только временным группировкам и считается
+// один раз на кусок интервала.
+std::string keyFor(GroupField field, const ActivityRecord& record, const std::tm& local) {
     switch (field) {
         case GroupField::Process: return record.processName.empty() ? "—" : record.processName;
         case GroupField::Category: return record.category.empty() ? "Без категории" : record.category;
@@ -274,9 +280,17 @@ std::map<Key, Agg> applyTopN(const std::map<Key, Agg>& source, int topN, Metric 
             }
         }
         if (other.total > 0) {
+            // Реальная группа может называться «Остальные». Без отдельной метки технический
+            // остаток перезаписал бы её агрегат и часть времени просто исчезла бы из отчёта.
+            std::string label = "Остальные";
+            const bool clashes = std::any_of(items.begin(), items.end(), [&label](const auto& item) {
+                return !item.first.empty() && item.first.back() == label;
+            });
+            if (clashes) label = "Остальные (Top N)";
+
             Key otherKey = parent;
-            otherKey.push_back("Остальные");
-            result[std::move(otherKey)] = std::move(other);
+            otherKey.push_back(std::move(label));
+            merge(result[std::move(otherKey)], other);
         }
     }
     return result;
@@ -284,20 +298,63 @@ std::map<Key, Agg> applyTopN(const std::map<Key, Agg>& source, int topN, Metric 
 
 using Detail = std::pair<Key, Agg>;
 
-std::vector<Detail> orderDetails(const std::map<Key, Agg>& details, Metric metric, bool descending) {
-    std::vector<Detail> ordered(details.begin(), details.end());
-    std::stable_sort(ordered.begin(), ordered.end(), [metric, descending](const Detail& left, const Detail& right) {
-        Key leftParent = left.first;
-        Key rightParent = right.first;
-        if (!leftParent.empty()) leftParent.pop_back();
-        if (!rightParent.empty()) rightParent.pop_back();
-        if (leftParent != rightParent) return leftParent < rightParent;
+// Агрегаты всех префиксов группировок, длины 1..size. Длина size — это сама детальная строка.
+// Используются и для промежуточных итогов, и для сортировки верхних уровней.
+std::map<Key, Agg> buildLevelAggregates(const std::map<Key, Agg>& details) {
+    std::map<Key, Agg> levels;
+    for (const auto& [key, aggregate] : details) {
+        for (std::size_t count = 1; count <= key.size(); ++count) {
+            Key prefix(key.begin(), key.begin() + static_cast<std::ptrdiff_t>(count));
+            merge(levels[prefix], aggregate);
+        }
+    }
+    return levels;
+}
 
-        const auto leftValue = metricValue(left.second, metric);
-        const auto rightValue = metricValue(right.second, metric);
-        if (leftValue != rightValue) return descending ? leftValue > rightValue : leftValue < rightValue;
-        return left.first < right.first;
+std::vector<Detail> orderDetails(const std::map<Key, Agg>& details,
+                                 const std::map<Key, Agg>& levels,
+                                 Metric metric,
+                                 bool descending) {
+    struct Sortable {
+        const Key* key{};
+        const Agg* aggregate{};
+        std::vector<double> levelValues;
+    };
+
+    std::vector<Sortable> sortable;
+    sortable.reserve(details.size());
+    for (const auto& [key, aggregate] : details) {
+        Sortable item{&key, &aggregate, {}};
+        item.levelValues.reserve(key.size());
+        for (std::size_t count = 1; count <= key.size(); ++count) {
+            Key prefix(key.begin(), key.begin() + static_cast<std::ptrdiff_t>(count));
+            const auto found = levels.find(prefix);
+            item.levelValues.push_back(found != levels.end() ? metricValue(found->second, metric) : 0.0);
+        }
+        sortable.push_back(std::move(item));
+    }
+
+    std::stable_sort(sortable.begin(), sortable.end(), [descending](const Sortable& left, const Sortable& right) {
+        const auto& leftKey = *left.key;
+        const auto& rightKey = *right.key;
+        const auto common = std::min(leftKey.size(), rightKey.size());
+        for (std::size_t index = 0; index < common; ++index) {
+            if (leftKey[index] == rightKey[index]) continue;
+            // Порядок задаёт первый различающийся уровень, и сравниваются агрегаты префиксов.
+            // Поэтому выбранный показатель управляет сортировкой на всех уровнях, а не только
+            // на самом глубоком, а строки с общим родителем остаются соседними — от этого
+            // зависит корректная расстановка промежуточных итогов.
+            const auto leftValue = left.levelValues[index];
+            const auto rightValue = right.levelValues[index];
+            if (leftValue != rightValue) return descending ? leftValue > rightValue : leftValue < rightValue;
+            return leftKey[index] < rightKey[index];
+        }
+        return leftKey.size() < rightKey.size();
     });
+
+    std::vector<Detail> ordered;
+    ordered.reserve(sortable.size());
+    for (const auto& item : sortable) ordered.emplace_back(*item.key, *item.aggregate);
     return ordered;
 }
 
@@ -319,14 +376,18 @@ ReportResult buildReport(const std::vector<ActivityRecord>& records, const Repor
     long long syntheticId = 1;
     const auto mode = splitMode(definition);
 
+    const bool anyLocalTimeGroup = std::any_of(definition.groups.begin(), definition.groups.end(), needsLocalTime);
+
     for (const auto& record : records) {
         if (!recordMatches(record, definition.filter)) continue;
         const auto recordId = record.id != 0 ? record.id : -(syntheticId++);
         for (const auto& piece : splitRecord(record, definition.start, definition.end, mode)) {
+            std::tm local{};
+            if (anyLocalTimeGroup) local = timeutil::localTm(piece.start);
             Key key;
             key.reserve(definition.groups.size());
             for (const auto group : definition.groups) {
-                key.push_back(keyFor(group, record, piece.start));
+                key.push_back(keyFor(group, record, local));
             }
             add(fullDetails[key], piece.seconds, record.isIdle, recordId);
             add(grand, piece.seconds, record.isIdle, recordId);
@@ -344,15 +405,8 @@ ReportResult buildReport(const std::vector<ActivityRecord>& records, const Repor
     }
 
     const auto details = applyTopN(fullDetails, definition.topN, definition.sortMetric);
-    const auto ordered = orderDetails(details, definition.sortMetric, definition.sortDescending);
-
-    std::map<Key, Agg> prefixes;
-    for (const auto& [key, aggregate] : details) {
-        for (std::size_t count = 1; count < key.size(); ++count) {
-            Key prefix(key.begin(), key.begin() + static_cast<std::ptrdiff_t>(count));
-            merge(prefixes[prefix], aggregate);
-        }
-    }
+    const auto prefixes = buildLevelAggregates(details);
+    const auto ordered = orderDetails(details, prefixes, definition.sortMetric, definition.sortDescending);
 
     Key previous;
     const auto emitClosed = [&](const Key& previousKey, const Key& nextKey) {

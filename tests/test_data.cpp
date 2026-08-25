@@ -176,6 +176,24 @@ int main() {
         assert(appDataDirectory(exeDir) == exeDir/"data");
     }
 
+    // A writable program directory is the default location even without portable.txt.
+    {
+        const auto exeDir=dir/"plain-app";
+        std::filesystem::create_directories(exeDir);
+        assert(!std::filesystem::exists(exeDir/"portable.txt"));
+        assert(appDataDirectory(exeDir) == exeDir/"data");
+        // The probe file used to detect writability must not be left behind.
+        assert(!std::filesystem::exists(exeDir/"data"/".pcat-write-test"));
+    }
+
+    // Existing data next to the executable keeps winning, so an upgrade never loses history.
+    {
+        const auto exeDir=dir/"legacy-app";
+        std::filesystem::create_directories(exeDir/"data");
+        std::ofstream(exeDir/"data"/"activity_tracker.db") << "";
+        assert(appDataDirectory(exeDir) == exeDir/"data");
+    }
+
     // UTF-8 BOM from common Windows editors is accepted.
     {
         std::ofstream file(dir/"settings.json",std::ios::binary|std::ios::trunc);
@@ -183,13 +201,28 @@ int main() {
     }
     assert(settingsService.load().idleThresholdSeconds==91);
 
-    // Invalid typed values are treated as a corrupt settings file instead of invoking an out-of-range cast.
+    // A wrong type in one field must not discard every other user setting. The field falls back to its
+    // default, the out-of-range cast is still avoided, the file is left untouched and the problem is
+    // reported through lastLoadWarnings().
     {
         std::ofstream file(dir/"settings.json",std::ios::binary|std::ios::trunc);
-        file << R"({"IdleThresholdSeconds":2147483648,"PollingIntervalSeconds":"two"})";
+        file << R"({"IdleThresholdSeconds":2147483648,"PollingIntervalSeconds":"two","ExcludedProcesses":["keep.exe"]})";
+    }
+    const auto tolerated=settingsService.load();
+    assert(tolerated.idleThresholdSeconds==60);
+    assert(tolerated.pollingIntervalSeconds==2);
+    assert(tolerated.excludedProcesses.size()==1&&tolerated.excludedProcesses[0]=="keep.exe");
+    assert(settingsService.lastLoadWarnings().size()==2);
+    { auto corrupt=dir/"settings.json";corrupt += ".corrupt";assert(!std::filesystem::exists(corrupt)); }
+
+    // Structural damage is still corruption: keep a copy of the file and fall back to defaults.
+    {
+        std::ofstream file(dir/"settings.json",std::ios::binary|std::ios::trunc);
+        file << "{ this is not json";
     }
     const auto repaired=settingsService.load();
     assert(repaired.idleThresholdSeconds==60);
+    assert(repaired.excludedProcesses.size()==AppSettings{}.excludedProcesses.size());
     { auto corrupt=dir/"settings.json";corrupt += ".corrupt";assert(std::filesystem::exists(corrupt)); }
 
     // An I/O failure is not a parse failure: do not overwrite an unreadable settings path with defaults.

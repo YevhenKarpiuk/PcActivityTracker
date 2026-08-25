@@ -22,10 +22,14 @@ public:
                        const std::string& category,
                        const std::string& title) override;
     void deleteAll() override;
+    // Записи, для которых не удалось восстановить время ни строгим парсером, ни SQLite.
+    // Они не попадают в запросы по периоду, поэтому о них нужно сообщать явно, а не терять молча.
+    long long undatedRecordCount();
     void saveOpenCheckpoint(const ActivityRecord& record) override;
     void clearOpenCheckpoint() override;
     const std::filesystem::path& path() const { return dbPath_; }
 private:
+    void ensureOpen() const;
     void exec(const char* sql);
     sqlite3* db_{};
     std::filesystem::path dbPath_;

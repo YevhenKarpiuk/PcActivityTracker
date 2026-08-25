@@ -1,6 +1,8 @@
 #include <windows.h>
 
-IDI_APP_ICON ICON "@PCAT_ICON_PATH@"
+/* Числовой идентификатор, а не символьное имя: по нему иконку забирает LoadImage
+   в src/ui/TrayIcon.cpp. Значение задаётся в CMakeLists.txt (PCAT_ICON_RESOURCE_ID). */
+@PCAT_ICON_RESOURCE_ID@ ICON "@PCAT_ICON_PATH@"
 
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION 0,2,0,0

@@ -14,6 +14,7 @@
 
 namespace pcat {
 namespace {
+std::string pathUtf8(const std::filesystem::path& path){const auto value=path.u8string();return std::string(reinterpret_cast<const char*>(value.data()),value.size());}
 bool hasGroup(const ReportDefinition& d,GroupField g){return std::find(d.groups.begin(),d.groups.end(),g)!=d.groups.end();}
 bool hasMetric(const ReportDefinition& d,Metric m){return std::find(d.metrics.begin(),d.metrics.end(),m)!=d.metrics.end();}
 void toggleGroup(ReportDefinition& d,GroupField g,bool on){auto it=std::find(d.groups.begin(),d.groups.end(),g);if(on&&it==d.groups.end())d.groups.push_back(g);if(!on&&it!=d.groups.end())d.groups.erase(it);}
@@ -27,7 +28,10 @@ void drawMetric(const ReportValues& v,Metric m){switch(m){case Metric::TotalSeco
 std::string rowLabel(const ReportRow& row){if(row.kind==RowKind::GrandTotal)return "ИТОГО";std::string out;for(std::size_t i=0;i<row.keys.size();++i){if(i)out+=" / ";out+=row.keys[i];}return out.empty()?"—":out;}
 std::string displayKey(const ReportRow& row,std::size_t column){if(row.kind==RowKind::GrandTotal)return column==0?"ИТОГО":"";if(column<row.keys.size())return row.keys[column];if(row.kind==RowKind::Subtotal&&column==row.keys.size())return "Итого";return {};}
 void drawPie(const std::vector<double>& values,const std::vector<std::string>& labels){
-    if(values.empty())return;double total=0;for(auto v:values)if(v>0)total+=v;if(total<=0)return;
+    if(values.empty())return;
+    double total=0;
+    for(auto v:values)if(v>0)total+=v;
+    if(total<=0)return;
     const ImVec2 area=ImGui::GetContentRegionAvail();const float height=245.0f;const float radius=std::min(90.0f,height*0.38f);const ImVec2 origin=ImGui::GetCursorScreenPos();const ImVec2 center(origin.x+radius+12.0f,origin.y+height*0.5f);auto* draw=ImGui::GetWindowDrawList();double angle=-3.14159265358979323846/2.0;
     for(std::size_t i=0;i<values.size();++i){if(values[i]<=0)continue;const double next=angle+2.0*3.14159265358979323846*(values[i]/total);const ImU32 color=ImColor::HSV(static_cast<float>((i*0.61803398875)-std::floor(i*0.61803398875)),0.60f,0.90f);draw->PathLineTo(center);draw->PathArcTo(center,radius,static_cast<float>(angle),static_cast<float>(next),24);draw->PathFillConvex(color);angle=next;}
     ImGui::Dummy(ImVec2(radius*2.0f+24.0f,height));ImGui::SameLine();ImGui::BeginGroup();for(std::size_t i=0;i<labels.size()&&i<12;++i){const ImU32 color=ImColor::HSV(static_cast<float>((i*0.61803398875)-std::floor(i*0.61803398875)),0.60f,0.90f);ImGui::ColorButton(("##pie"+std::to_string(i)).c_str(),ImGui::ColorConvertU32ToFloat4(color),ImGuiColorEditFlags_NoTooltip,ImVec2(12,12));ImGui::SameLine();ImGui::Text("%s: %.2f",labels[i].c_str(),values[i]);}if(labels.size()>12)ImGui::Text("... ещё %zu",labels.size()-12);ImGui::EndGroup();(void)area;
@@ -49,7 +53,7 @@ void ReportView::draw(IActivityRepository& repository,const std::optional<Activi
     ImGui::TextUnformatted("Фильтры");ImGui::SetNextItemWidth(180);ImGui::InputText("Программа##filter",processFilter_.data(),processFilter_.size());ImGui::SameLine();ImGui::SetNextItemWidth(180);ImGui::InputText("Категория##filter",categoryFilter_.data(),categoryFilter_.size());ImGui::SameLine();ImGui::SetNextItemWidth(180);ImGui::InputText("Домен##filter",domainFilter_.data(),domainFilter_.size());ImGui::SameLine();ImGui::SetNextItemWidth(240);ImGui::InputText("Окно##filter",titleFilter_.data(),titleFilter_.size());
     ImGui::SeparatorText("Группировки");for(auto g:groupOrder_){bool v=hasGroup(def_,g);if(ImGui::Checkbox(groupFieldName(g).c_str(),&v))toggleGroup(def_,g,v);ImGui::SameLine();}ImGui::NewLine();
     ImGui::SeparatorText("Показатели");for(auto m:metricOrder_){bool v=hasMetric(def_,m);const auto id=metricName(m)+"##metric";if(ImGui::Checkbox(id.c_str(),&v))toggleMetric(def_,m,v);ImGui::SameLine();}ImGui::NewLine();
-    ImGui::Checkbox("Промежуточные итоги",&def_.showSubtotals);ImGui::SameLine();ImGui::Checkbox("Общий ИТОГО",&def_.showGrandTotal);ImGui::SameLine();if(ImGui::Button("Сформировать отчёт"))rebuild(repository,liveRecord);ImGui::SameLine();if(ImGui::Button("Экспорт CSV")){try{exportReportCsv(result_,"report.csv");status_="Сохранено: report.csv";}catch(const std::exception&e){status_=e.what();}}ImGui::SameLine();if(ImGui::Button("Экспорт JSON")){try{exportReportJson(result_,"report.json");status_="Сохранено: report.json";}catch(const std::exception&e){status_=e.what();}}
+    ImGui::Checkbox("Промежуточные итоги",&def_.showSubtotals);ImGui::SameLine();ImGui::Checkbox("Общий ИТОГО",&def_.showGrandTotal);ImGui::SameLine();if(ImGui::Button("Сформировать отчёт"))rebuild(repository,liveRecord);ImGui::SameLine();if(ImGui::Button("Экспорт CSV")){try{const auto file=exportDirectory_/"report.csv";exportReportCsv(result_,file);status_="Сохранено: "+pathUtf8(file);}catch(const std::exception&e){status_=e.what();}}ImGui::SameLine();if(ImGui::Button("Экспорт JSON")){try{const auto file=exportDirectory_/"report.json";exportReportJson(result_,file);status_="Сохранено: "+pathUtf8(file);}catch(const std::exception&e){status_=e.what();}}
     if(!status_.empty())ImGui::TextUnformatted(status_.c_str());
     ImGui::Text("Общий итог: %s | активно %s | простой %s | периодов %lld",timeutil::formatDuration(result_.grandTotal.totalSeconds).c_str(),timeutil::formatDuration(result_.grandTotal.activeSeconds).c_str(),timeutil::formatDuration(result_.grandTotal.idleSeconds).c_str(),result_.grandTotal.recordCount);
 
@@ -59,7 +63,9 @@ void ReportView::draw(IActivityRepository& repository,const std::optional<Activi
     const auto& shownDef=result_.definition;
     const int columns=static_cast<int>(shownDef.groups.size()+shownDef.metrics.size());
     if(columns>0&&ImGui::BeginTable("report",columns,ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg|ImGuiTableFlags_ScrollY|ImGuiTableFlags_Resizable,ImVec2(0,330))){
-        for(auto g:shownDef.groups)ImGui::TableSetupColumn(groupFieldName(g).c_str());for(auto m:shownDef.metrics)ImGui::TableSetupColumn(metricName(m).c_str());ImGui::TableHeadersRow();
+        for(auto g:shownDef.groups)ImGui::TableSetupColumn(groupFieldName(g).c_str());
+        for(auto m:shownDef.metrics)ImGui::TableSetupColumn(metricName(m).c_str());
+        ImGui::TableHeadersRow();
         for(const auto& row:result_.rows){ImGui::TableNextRow();if(row.kind==RowKind::GrandTotal)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(72,84,100,255));else if(row.kind==RowKind::Subtotal)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(52,62,74,255));int column=0;for(std::size_t i=0;i<shownDef.groups.size();++i){ImGui::TableSetColumnIndex(column++);const auto text=displayKey(row,i);if(row.kind!=RowKind::Detail&&(!text.empty())){ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(1,1,1,1));ImGui::TextUnformatted(text.c_str());ImGui::PopStyleColor();}else ImGui::TextUnformatted(text.c_str());}for(auto m:shownDef.metrics){ImGui::TableSetColumnIndex(column++);drawMetric(row.values,m);}}
         ImGui::EndTable();
     }

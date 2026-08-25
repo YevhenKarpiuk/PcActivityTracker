@@ -1,6 +1,10 @@
 #include "platform/Factory.h"
 #ifdef _WIN32
+// libstdc++ на MinGW уже задаёт NOMINMAX=1 из bits/os_defines.h, поэтому определять его
+// безусловно нельзя: получается конфликтующее переопределение.
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #include <uiautomation.h>
 
@@ -55,7 +59,23 @@ public:
     UiAutomationContext(const UiAutomationContext&) = delete;
     UiAutomationContext& operator=(const UiAutomationContext&) = delete;
 
-    std::optional<BrowserAddress> addressBar(HWND window) const {
+    // Обход дерева UI Automation — самая дорогая часть опроса, а активное окно браузера
+    // обычно не меняется между опросами. Результат кэшируется по паре окно+заголовок:
+    // при переходе на другую страницу заголовок меняется, и кэш сам инвалидируется.
+    // Отрицательный результат тоже кэшируется, иначе окно без адресной строки заставляло бы
+    // обходить дерево каждые несколько секунд.
+    std::optional<BrowserAddress> addressBar(HWND window, const std::wstring& title) {
+        if (cacheValid_ && window == cachedWindow_ && title == cachedTitle_) return cachedAddress_;
+        auto result = queryAddressBar(window);
+        cachedWindow_ = window;
+        cachedTitle_ = title;
+        cachedAddress_ = result;
+        cacheValid_ = true;
+        return result;
+    }
+
+private:
+    std::optional<BrowserAddress> queryAddressBar(HWND window) const {
         if (!automation_ || !window) return std::nullopt;
 
         IUIAutomationElement* root = nullptr;
@@ -110,9 +130,12 @@ public:
         return result;
     }
 
-private:
     IUIAutomation* automation_{};
     bool uninitialize_{};
+    HWND cachedWindow_{};
+    std::wstring cachedTitle_;
+    std::optional<BrowserAddress> cachedAddress_;
+    bool cacheValid_{};
 };
 
 UiAutomationContext& uiAutomation() {
@@ -154,7 +177,8 @@ public:
         snapshot.exePath = utf8(path);
         if (!path.empty()) snapshot.processName = utf8(std::filesystem::path(path).filename().wstring());
 
-        LASTINPUTINFO input{sizeof(input)};
+        LASTINPUTINFO input{};
+        input.cbSize = sizeof(input);
         if (GetLastInputInfo(&input)) {
             // LASTINPUTINFO::dwTime and GetTickCount() are both 32-bit values and unsigned subtraction
             // intentionally handles the ~49.7 day wrap-around.
@@ -163,7 +187,7 @@ public:
         }
 
         if (isBrowserProcess(snapshot.processName)) {
-            auto address = uiAutomation().addressBar(window);
+            auto address = uiAutomation().addressBar(window, title);
             if (!address) address = findBrowserAddressInText(snapshot.windowTitle);
             if (address) {
                 snapshot.browserUrl = std::move(address->url);

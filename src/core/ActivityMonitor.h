@@ -1,5 +1,6 @@
 #pragma once
 #include "core/AppSettings.h"
+#include "core/CategoryResolver.h"
 #include "core/IActivityProvider.h"
 #include "core/IActivityRepository.h"
 
@@ -46,6 +47,7 @@ private:
     std::mutex processMutex_;
     std::mutex persistenceMutex_;
     AppSettings settings_;
+    CategoryIndex categoryIndex_;
     std::optional<ActivitySnapshot> current_;
     std::string currentCategory_;
     std::chrono::system_clock::time_point currentStart_{};

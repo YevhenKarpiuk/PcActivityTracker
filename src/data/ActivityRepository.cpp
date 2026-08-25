@@ -19,6 +19,10 @@ Statement prepare(sqlite3* db,const char* sql) { sqlite3_stmt* raw=nullptr;check
 long long epochMillis(std::chrono::system_clock::time_point tp) {
     return std::chrono::duration_cast<std::chrono::milliseconds>(tp.time_since_epoch()).count();
 }
+std::chrono::system_clock::time_point fromEpochMillis(long long value) {
+    return std::chrono::system_clock::time_point{
+        std::chrono::duration_cast<std::chrono::system_clock::duration>(std::chrono::milliseconds(value))};
+}
 std::string pathUtf8(const std::filesystem::path& path) {
     const auto value = path.u8string();
     return std::string(reinterpret_cast<const char*>(value.data()), value.size());
@@ -30,9 +34,15 @@ void rollbackNoThrow(sqlite3* db){sqlite3_exec(db,"ROLLBACK;",nullptr,nullptr,nu
 }
 
 ActivityRepository::ActivityRepository(std::filesystem::path path):dbPath_(std::move(path)){}
-ActivityRepository::~ActivityRepository(){if(db_)sqlite3_close(db_);}
+// sqlite3_close() возвращает SQLITE_BUSY при незакрытых statement и оставляет соединение
+// и блокировку файла. Вариант _v2 переводит соединение в zombie и освобождает его корректно.
+ActivityRepository::~ActivityRepository(){if(db_)sqlite3_close_v2(db_);}
 
-void ActivityRepository::exec(const char* sql){char*err=nullptr;const int rc=sqlite3_exec(db_,sql,nullptr,nullptr,&err);if(rc!=SQLITE_OK){std::string msg=err?err:"SQLite error";sqlite3_free(err);throw std::runtime_error(msg);}}
+void ActivityRepository::ensureOpen() const {
+    if(!db_) throw std::runtime_error("Хранилище активности не открыто: сначала нужно вызвать initialize()");
+}
+
+void ActivityRepository::exec(const char* sql){ensureOpen();char*err=nullptr;const int rc=sqlite3_exec(db_,sql,nullptr,nullptr,&err);if(rc!=SQLITE_OK){std::string msg=err?err:"SQLite error";sqlite3_free(err);throw std::runtime_error(msg);}}
 
 void ActivityRepository::initialize(){
     std::scoped_lock lock(mutex_);
@@ -40,7 +50,7 @@ void ActivityRepository::initialize(){
     if(!dbPath_.parent_path().empty())std::filesystem::create_directories(dbPath_.parent_path());
     const auto dbPathUtf8=pathUtf8(dbPath_);
     const auto rc=sqlite3_open_v2(dbPathUtf8.c_str(),&db_,SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_FULLMUTEX,nullptr);
-    if(rc!=SQLITE_OK){std::string msg=db_?sqlite3_errmsg(db_):"Cannot open SQLite database";if(db_){sqlite3_close(db_);db_=nullptr;}throw std::runtime_error(msg);}
+    if(rc!=SQLITE_OK){std::string msg=db_?sqlite3_errmsg(db_):"Cannot open SQLite database";if(db_){sqlite3_close_v2(db_);db_=nullptr;}throw std::runtime_error(msg);}
     try {
     sqlite3_busy_timeout(db_,5000);
     exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;"
@@ -75,6 +85,15 @@ void ActivityRepository::initialize(){
         check(selectStep,db_);
     }
 
+    // Второй проход: то, что отверг строгий парсер, SQLite часто всё же понимает (иные
+    // разделители, другая длина дробной части). Без него такая запись навсегда осталась бы
+    // с NULL в epoch-колонках и выпала бы из истории, отчётов и удаления по фильтру,
+    // потому что все запросы диапазона идут именно по epoch.
+    exec("UPDATE activity_records SET start_epoch_ms=CAST(strftime('%s',start_time) AS INTEGER)*1000 "
+         "WHERE start_epoch_ms IS NULL AND strftime('%s',start_time) IS NOT NULL;"
+         "UPDATE activity_records SET end_epoch_ms=CAST(strftime('%s',end_time) AS INTEGER)*1000 "
+         "WHERE end_epoch_ms IS NULL AND strftime('%s',end_time) IS NOT NULL;");
+
     exec("CREATE INDEX IF NOT EXISTS idx_activity_records_start_epoch ON activity_records(start_epoch_ms);"
          "CREATE INDEX IF NOT EXISTS idx_activity_records_end_epoch ON activity_records(end_epoch_ms);"
          "CREATE INDEX IF NOT EXISTS idx_activity_records_process_name ON activity_records(process_name);"
@@ -91,7 +110,7 @@ void ActivityRepository::initialize(){
              "DELETE FROM monitor_checkpoint;COMMIT;");
     }catch(...){rollbackNoThrow(db_);throw;}
     } catch (...) {
-        sqlite3_close(db_);
+        sqlite3_close_v2(db_);
         db_=nullptr;
         throw;
     }
@@ -99,6 +118,7 @@ void ActivityRepository::initialize(){
 
 void ActivityRepository::insert(const ActivityRecord& record){
     std::scoped_lock lock(mutex_);
+    ensureOpen();
     auto statement=prepare(db_,"INSERT INTO activity_records(start_time,end_time,start_epoch_ms,end_epoch_ms,duration_seconds,process_name,window_title,exe_path,browser_url,browser_domain,is_idle,category) VALUES(?,?,?,?,?,?,?,?,?,?,?,?);");
     const auto start=timeutil::toIso8601Utc(record.startTime),end=timeutil::toIso8601Utc(record.endTime);
     bindText(statement.get(),1,start);bindText(statement.get(),2,end);sqlite3_bind_int64(statement.get(),3,epochMillis(record.startTime));sqlite3_bind_int64(statement.get(),4,epochMillis(record.endTime));sqlite3_bind_int64(statement.get(),5,record.durationSeconds);
@@ -108,6 +128,7 @@ void ActivityRepository::insert(const ActivityRecord& record){
 
 void ActivityRepository::commitClosedRecord(const ActivityRecord& record){
     std::scoped_lock lock(mutex_);
+    ensureOpen();
     begin(db_);
     try {
         auto statement=prepare(db_,"INSERT INTO activity_records(start_time,end_time,start_epoch_ms,end_epoch_ms,duration_seconds,process_name,window_title,exe_path,browser_url,browser_domain,is_idle,category) VALUES(?,?,?,?,?,?,?,?,?,?,?,?);");
@@ -123,15 +144,21 @@ void ActivityRepository::commitClosedRecord(const ActivityRecord& record){
 }
 
 std::vector<ActivityRecord> ActivityRepository::getRecords(std::chrono::system_clock::time_point start,std::chrono::system_clock::time_point end){
-    std::scoped_lock lock(mutex_);std::vector<ActivityRecord> result;
-    auto s=prepare(db_,"SELECT id,start_time,end_time,duration_seconds,process_name,window_title,exe_path,browser_url,browser_domain,is_idle,category FROM activity_records WHERE end_epoch_ms>? AND start_epoch_ms<? ORDER BY start_epoch_ms DESC;");
+    std::scoped_lock lock(mutex_);ensureOpen();std::vector<ActivityRecord> result;
+    auto s=prepare(db_,"SELECT id,start_time,end_time,duration_seconds,process_name,window_title,exe_path,browser_url,browser_domain,is_idle,category,start_epoch_ms,end_epoch_ms FROM activity_records WHERE end_epoch_ms>? AND start_epoch_ms<? ORDER BY start_epoch_ms DESC;");
     sqlite3_bind_int64(s.get(),1,epochMillis(start));sqlite3_bind_int64(s.get(),2,epochMillis(end));
-    int step=SQLITE_OK;while((step=sqlite3_step(s.get()))==SQLITE_ROW){ActivityRecord r;r.id=sqlite3_column_int64(s.get(),0);r.startTime=timeutil::parseIso8601(columnText(s.get(),1));r.endTime=timeutil::parseIso8601(columnText(s.get(),2));r.durationSeconds=sqlite3_column_int64(s.get(),3);r.processName=columnText(s.get(),4);r.windowTitle=columnText(s.get(),5);r.exePath=columnText(s.get(),6);r.browserUrl=columnText(s.get(),7);r.browserDomain=columnText(s.get(),8);r.isIdle=sqlite3_column_int(s.get(),9)!=0;r.category=columnText(s.get(),10);if(r.category.empty())r.category="Без категории";result.push_back(std::move(r));}
+    int step=SQLITE_OK;while((step=sqlite3_step(s.get()))==SQLITE_ROW){ActivityRecord r;r.id=sqlite3_column_int64(s.get(),0);
+        // Текст остаётся источником полной точности legacy .NET (100 нс), но одна нечитаемая
+        // строка не должна ронять весь запрос: тогда берём epoch-колонки, по которым запись и отобрана.
+        try{r.startTime=timeutil::parseIso8601(columnText(s.get(),1));r.endTime=timeutil::parseIso8601(columnText(s.get(),2));}
+        catch(...){r.startTime=fromEpochMillis(sqlite3_column_int64(s.get(),11));r.endTime=fromEpochMillis(sqlite3_column_int64(s.get(),12));}
+        r.durationSeconds=sqlite3_column_int64(s.get(),3);r.processName=columnText(s.get(),4);r.windowTitle=columnText(s.get(),5);r.exePath=columnText(s.get(),6);r.browserUrl=columnText(s.get(),7);r.browserDomain=columnText(s.get(),8);r.isIdle=sqlite3_column_int(s.get(),9)!=0;r.category=columnText(s.get(),10);if(r.category.empty())r.category="Без категории";result.push_back(std::move(r));}
     check(step,db_);return result;
 }
 
 int ActivityRepository::deleteByFilter(std::chrono::system_clock::time_point start,std::chrono::system_clock::time_point end,const std::string& process,const std::string& category,const std::string& title){
     std::scoped_lock lock(mutex_);
+    ensureOpen();
     auto select=prepare(db_,"SELECT id,process_name,category,window_title FROM activity_records WHERE end_epoch_ms>? AND start_epoch_ms<?;");
     sqlite3_bind_int64(select.get(),1,epochMillis(start));sqlite3_bind_int64(select.get(),2,epochMillis(end));
     std::vector<sqlite3_int64> ids;
@@ -147,6 +174,7 @@ int ActivityRepository::deleteByFilter(std::chrono::system_clock::time_point sta
 
 void ActivityRepository::deleteAll(){
     std::scoped_lock lock(mutex_);
+    ensureOpen();
     begin(db_);
     try {
         exec("DELETE FROM activity_records;DELETE FROM monitor_checkpoint;COMMIT;");
@@ -159,9 +187,18 @@ void ActivityRepository::deleteAll(){
 void ActivityRepository::saveOpenCheckpoint(const ActivityRecord& record){
     if(record.durationSeconds<=0)return;
     std::scoped_lock lock(mutex_);
+    ensureOpen();
     auto s=prepare(db_,"INSERT INTO monitor_checkpoint(id,start_time,end_time,start_epoch_ms,end_epoch_ms,duration_seconds,process_name,window_title,exe_path,browser_url,browser_domain,is_idle,category) VALUES(1,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET start_time=excluded.start_time,end_time=excluded.end_time,start_epoch_ms=excluded.start_epoch_ms,end_epoch_ms=excluded.end_epoch_ms,duration_seconds=excluded.duration_seconds,process_name=excluded.process_name,window_title=excluded.window_title,exe_path=excluded.exe_path,browser_url=excluded.browser_url,browser_domain=excluded.browser_domain,is_idle=excluded.is_idle,category=excluded.category;");
     bindText(s.get(),1,timeutil::toIso8601Utc(record.startTime));bindText(s.get(),2,timeutil::toIso8601Utc(record.endTime));sqlite3_bind_int64(s.get(),3,epochMillis(record.startTime));sqlite3_bind_int64(s.get(),4,epochMillis(record.endTime));sqlite3_bind_int64(s.get(),5,record.durationSeconds);bindText(s.get(),6,record.processName);bindText(s.get(),7,record.windowTitle);bindText(s.get(),8,record.exePath);bindText(s.get(),9,record.browserUrl);bindText(s.get(),10,record.browserDomain);sqlite3_bind_int(s.get(),11,record.isIdle?1:0);bindText(s.get(),12,record.category);check(sqlite3_step(s.get()),db_);
 }
 
-void ActivityRepository::clearOpenCheckpoint(){std::scoped_lock lock(mutex_);exec("DELETE FROM monitor_checkpoint;");}
+long long ActivityRepository::undatedRecordCount(){
+    std::scoped_lock lock(mutex_);ensureOpen();
+    auto s=prepare(db_,"SELECT count(*) FROM activity_records WHERE start_epoch_ms IS NULL OR end_epoch_ms IS NULL;");
+    long long count=0;const int step=sqlite3_step(s.get());
+    if(step==SQLITE_ROW)count=sqlite3_column_int64(s.get(),0); else check(step,db_);
+    return count;
+}
+
+void ActivityRepository::clearOpenCheckpoint(){std::scoped_lock lock(mutex_);ensureOpen();exec("DELETE FROM monitor_checkpoint;");}
 }

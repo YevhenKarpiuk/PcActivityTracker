@@ -1,0 +1,10 @@
+Portable mode.
+
+Пока этот файл лежит рядом с PcActivityTracker.exe, база и настройки хранятся
+в подкаталоге data рядом с программой:
+
+    data\activity_tracker.db
+    data\settings.json
+
+Удалите этот файл, если хотите, чтобы приложение могло уйти в
+%LOCALAPPDATA%\PcActivityTracker при недоступном на запись каталоге программы.
