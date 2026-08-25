@@ -7,39 +7,50 @@
   },
   "configurePresets": [
     {
-      "name": "windows-release",
-      "displayName": "Windows x64 Release (MSYS2 UCRT64 + Ninja)",
+      "name": "windows-toolchain",
+      "hidden": true,
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/windows-release",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
         "PCAT_BUILD_APP": "ON",
         "PCAT_BUILD_DATA": "ON",
         "PCAT_BUILD_TESTS": "ON",
         "PCAT_FETCH_DEPS": "ON",
         "PCAT_STRICT_WARNINGS": "OFF",
-        "CMAKE_C_COMPILER": "C:/msys64/ucrt64/bin/gcc.exe",
-        "CMAKE_CXX_COMPILER": "C:/msys64/ucrt64/bin/g++.exe",
-        "CMAKE_RC_COMPILER": "C:/msys64/ucrt64/bin/windres.exe",
-        "CMAKE_PREFIX_PATH": "C:/msys64/ucrt64"
+        "CMAKE_C_COMPILER": "C:/tools/mingw64/bin/gcc.exe",
+        "CMAKE_CXX_COMPILER": "C:/tools/mingw64/bin/g++.exe",
+        "CMAKE_RC_COMPILER": "C:/tools/mingw64/bin/windres.exe",
+        "CMAKE_MAKE_PROGRAM": "C:/tools/ninja/ninja.exe",
+        "CMAKE_PREFIX_PATH": "C:/tools/mingw64"
+      }
+    },
+    {
+      "name": "windows-release",
+      "inherits": "windows-toolchain",
+      "displayName": "Windows x64 Release (C:/tools/mingw64 UCRT + Ninja)",
+      "binaryDir": "${sourceDir}/build/windows-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
       }
     },
     {
       "name": "windows-debug",
-      "displayName": "Windows x64 Debug (MSYS2 UCRT64 + Ninja)",
-      "generator": "Ninja",
+      "inherits": "windows-toolchain",
+      "displayName": "Windows x64 Debug (C:/tools/mingw64 UCRT + Ninja)",
       "binaryDir": "${sourceDir}/build/windows-debug",
       "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "windows-core-tests",
+      "inherits": "windows-toolchain",
+      "displayName": "Windows core/data/report tests only (C:/tools/mingw64)",
+      "binaryDir": "${sourceDir}/build/windows-core-tests",
+      "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "PCAT_BUILD_APP": "ON",
-        "PCAT_BUILD_DATA": "ON",
-        "PCAT_BUILD_TESTS": "ON",
-        "PCAT_FETCH_DEPS": "ON",
-        "PCAT_STRICT_WARNINGS": "OFF",
-        "CMAKE_C_COMPILER": "C:/msys64/ucrt64/bin/gcc.exe",
-        "CMAKE_CXX_COMPILER": "C:/msys64/ucrt64/bin/g++.exe",
-        "CMAKE_RC_COMPILER": "C:/msys64/ucrt64/bin/windres.exe",
-        "CMAKE_PREFIX_PATH": "C:/msys64/ucrt64"
+        "PCAT_BUILD_APP": "OFF",
+        "PCAT_FETCH_DEPS": "OFF",
+        "PCAT_STRICT_WARNINGS": "ON"
       }
     },
     {
@@ -89,6 +100,10 @@
       "configurePreset": "windows-debug"
     },
     {
+      "name": "windows-core-tests",
+      "configurePreset": "windows-core-tests"
+    },
+    {
       "name": "debug",
       "configurePreset": "ninja-debug"
     },
@@ -117,11 +132,88 @@
       }
     },
     {
+      "name": "windows-core-tests",
+      "configurePreset": "windows-core-tests",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
       "name": "core-tests",
       "configurePreset": "core-tests-system-sqlite",
       "output": {
         "outputOnFailure": true
       }
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "windows-release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "windows-release"
+        },
+        {
+          "type": "build",
+          "name": "windows-release"
+        },
+        {
+          "type": "test",
+          "name": "windows-release"
+        }
+      ]
+    },
+    {
+      "name": "windows-debug",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "windows-debug"
+        },
+        {
+          "type": "build",
+          "name": "windows-debug"
+        },
+        {
+          "type": "test",
+          "name": "windows-debug"
+        }
+      ]
+    },
+    {
+      "name": "windows-core-tests",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "windows-core-tests"
+        },
+        {
+          "type": "build",
+          "name": "windows-core-tests"
+        },
+        {
+          "type": "test",
+          "name": "windows-core-tests"
+        }
+      ]
+    },
+    {
+      "name": "core-tests",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "core-tests-system-sqlite"
+        },
+        {
+          "type": "build",
+          "name": "core-tests"
+        },
+        {
+          "type": "test",
+          "name": "core-tests"
+        }
+      ]
     }
   ]
 }

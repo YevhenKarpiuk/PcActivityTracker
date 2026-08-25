@@ -20,7 +20,10 @@
 - собственный небольшой JSON reader/writer для совместимости `settings.json`
 - CMake + Ninja
 
-SDL3/Dear ImGui/ImPlot скачиваются CMake через `FetchContent` при первой полной конфигурации. SQLite для Windows берётся из MSYS2 UCRT64.
+SDL3/Dear ImGui/ImPlot скачиваются CMake через `FetchContent` при первой полной конфигурации.
+SQLite берётся из системы, если найден `find_package(SQLite3)`; иначе `cmake/SQLite3.cmake`
+скачивает официальную amalgamation и собирает её статически. В Windows-инструментарии
+`C:\tools\mingw64` системного SQLite нет, поэтому используется amalgamation.
 
 ## Реализовано
 
@@ -94,7 +97,15 @@ category
 
 ## Windows
 
-Самый простой вариант после установки MSYS2 UCRT64:
+Инструментарий закреплён за `C:\tools`:
+
+```text
+C:\tools\mingw64   GCC 14.2.0 (MinGW-w64 UCRT) + windres
+C:\tools\cmake     CMake 4.1.2 + ctest
+C:\tools\ninja     Ninja 1.13.1
+```
+
+Дополнительно нужен Git — им `FetchContent` забирает SDL3/ImGui/ImPlot.
 
 ```cmd
 build_windows.cmd
@@ -118,7 +129,14 @@ cmake --build --preset core-tests
 ctest --preset core-tests
 ```
 
-Последняя проверка в рабочей среде:
+На Windows то же самое одной командой инструментами из `C:\tools`:
+
+```cmd
+C:\tools\cmake\bin\cmake.exe --workflow --preset windows-core-tests
+```
+
+Последняя проверка: Windows 11 x64, GCC 14.2.0 из `C:\tools\mingw64`, CMake 4.1.2,
+Ninja, флаги `-Wall -Wextra -Wpedantic -Werror`:
 
 ```text
 3/3 tests passed
@@ -127,9 +145,8 @@ ctest --preset core-tests
 - data
 ```
 
-Дополнительно общий код прошёл GCC `-Wall -Wextra -Wpedantic -Werror` и ASan/UBSan.
-
-Полный Windows `.exe` в текущей Linux-среде физически не собирался: здесь отсутствуют Windows SDK/MinGW и заблокирована загрузка GUI-зависимостей через `git clone`. Поэтому окончательная Windows-проверка предусмотрена `build_windows.cmd` на вашей Windows-машине.
+Полный Windows `.exe` в этой проверке не собирался. Приёмочная проверка GUI-сборки —
+`build_windows.cmd` (configure + build + ctest + runtime DLL + `.exe`).
 
 ## Portable mode
 

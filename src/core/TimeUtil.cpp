@@ -1,5 +1,6 @@
 #include "core/TimeUtil.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cctype>
 #include <cstdio>

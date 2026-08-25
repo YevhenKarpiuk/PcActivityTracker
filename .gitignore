@@ -4,11 +4,19 @@ out/
 *.db
 *.db-wal
 *.db-shm
+
+# Runtime-файлы приложения (portable data/ и рабочий каталог), но не конфигурация VS Code.
 settings.json
 settings.json.tmp
-settings.json.corrupt.*
-.DS_Store
-
-settings.json.corrupt
 settings.json.bak
-settings.json.tmp
+settings.json.corrupt
+settings.json.corrupt.*
+!.vscode/settings.json
+
+history.csv
+history.json
+report.csv
+report.json
+windows_build.log
+
+.DS_Store

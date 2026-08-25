@@ -3,7 +3,7 @@
 ## Цель проекта
 Трекер активности ПК на C++20. GUI: SDL3 + Dear ImGui. Графики: ImPlot. База: SQLite. Сборка: CMake + Ninja из VS Code, без обязательной Visual Studio и без .NET/Qt.
 
-Текущий приоритет разработки: (1) все общие ошибки логики/данных/надёжности, (2) рабочая Windows x64 сборка через MSYS2 UCRT64, (3) Linux/macOS после стабилизации Windows. Не откладывай общий дефект только потому, что он не связан с Windows.
+Текущий приоритет разработки: (1) все общие ошибки логики/данных/надёжности, (2) рабочая Windows x64 сборка через MinGW-w64 UCRT из `C:\tools`, (3) Linux/macOS после стабилизации Windows. Не откладывай общий дефект только потому, что он не связан с Windows.
 
 ## Главные архитектурные правила
 1. `src/core`, `src/data` и `src/reports` не должны включать Win32, Cocoa/AppKit, X11, SDL, ImGui или ImPlot.
@@ -44,7 +44,19 @@
 ```cmd
 build_windows.cmd
 ```
-Она обязана завершить configure + build + ctest и создать `build\windows-release\PcActivityTracker.exe`. Windows preset закреплён за `C:\msys64\ucrt64` GCC/G++/windres. Не переводить проект на MSVC/Visual Studio без явного запроса.
+Она обязана завершить configure + build + ctest и создать `build\windows-release\PcActivityTracker.exe`.
+
+Windows presets закреплены за локальным инструментарием:
+
+- `C:\tools\mingw64\bin` — GCC/G++/windres (MinGW-w64 UCRT);
+- `C:\tools\cmake\bin` — CMake/CTest;
+- `C:\tools\ninja\ninja.exe` — `CMAKE_MAKE_PROGRAM`.
+
+Пути переопределяются переменными `PCAT_TOOLS_ROOT`/`PCAT_MINGW_ROOT`. Не переводить проект на MSVC/Visual Studio без явного запроса.
+
+`build_windows.cmd` обязан оставаться ASCII-only: `cmd.exe` читает `.cmd` в OEM-кодировке, и кириллица внутри батника ломает разбор строк.
+
+SQLite3 подключается через `cmake/SQLite3.cmake`: сначала `find_package(SQLite3)`, при отсутствии — официальная amalgamation через `FetchContent` (`PCAT_SQLITE_MODE`, `PCAT_SQLITE_URL`). Не возвращай безусловный `find_package(SQLite3 REQUIRED)`: в `C:\tools\mingw64` системного SQLite нет.
 
 Общие non-GUI тесты:
 ```bash

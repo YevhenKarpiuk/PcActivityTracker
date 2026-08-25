@@ -25,10 +25,9 @@ FetchContent_Declare(
     GIT_TAG v1.92.9
     GIT_SHALLOW TRUE
 )
-FetchContent_GetProperties(imgui_src)
-if(NOT imgui_src_POPULATED)
-    FetchContent_Populate(imgui_src)
-endif()
+# imgui/implot не содержат собственного CMakeLists.txt, поэтому MakeAvailable только распакует
+# исходники. Однопараметрический FetchContent_Populate() удалён в CMake 4 и здесь не используется.
+FetchContent_MakeAvailable(imgui_src)
 add_library(imgui STATIC
     ${imgui_src_SOURCE_DIR}/imgui.cpp
     ${imgui_src_SOURCE_DIR}/imgui_demo.cpp
@@ -48,10 +47,9 @@ FetchContent_Declare(
     GIT_TAG v1.0
     GIT_SHALLOW TRUE
 )
-FetchContent_GetProperties(implot_src)
-if(NOT implot_src_POPULATED)
-    FetchContent_Populate(implot_src)
-endif()
+# imgui/implot не содержат собственного CMakeLists.txt, поэтому MakeAvailable только распакует
+# исходники. Однопараметрический FetchContent_Populate() удалён в CMake 4 и здесь не используется.
+FetchContent_MakeAvailable(implot_src)
 add_library(implot STATIC
     ${implot_src_SOURCE_DIR}/implot.cpp
     ${implot_src_SOURCE_DIR}/implot_items.cpp

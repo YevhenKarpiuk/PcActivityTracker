@@ -1,0 +1,16 @@
+{
+  "cmake.useCMakePresets": "always",
+  "cmake.configureOnOpen": false,
+  "cmake.cmakePath": "C:/tools/cmake/bin/cmake.exe",
+  "cmake.ctestPath": "C:/tools/cmake/bin/ctest.exe",
+  "cmake.copyCompileCommands": "${workspaceFolder}/build/compile_commands.json",
+  "files.encoding": "utf8",
+  "C_Cpp.default.cppStandard": "c++20",
+  "C_Cpp.default.cStandard": "c11",
+  "C_Cpp.default.compilerPath": "C:/tools/mingw64/bin/g++.exe",
+  "C_Cpp.default.intelliSenseMode": "windows-gcc-x64",
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+  "terminal.integrated.env.windows": {
+    "PATH": "C:\\tools\\mingw64\\bin;C:\\tools\\ninja;C:\\tools\\cmake\\bin;${env:PATH}"
+  }
+}

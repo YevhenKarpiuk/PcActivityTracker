@@ -47,7 +47,7 @@ target_link_libraries(pcat_reports PUBLIC pcat_core)
 pcat_target_warnings(pcat_reports)
 
 if(PCAT_BUILD_DATA)
-    find_package(SQLite3 REQUIRED)
+    include(cmake/SQLite3.cmake)
     add_library(pcat_data
         src/data/AppStoragePaths.cpp
         src/data/ActivityRepository.cpp
