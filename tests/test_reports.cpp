@@ -39,7 +39,7 @@ int main(){
   recAt(11,local(2026,8,24,9,0),local(2026,8,24,9,30),false,"b","X"),
   recAt(12,local(2026,8,24,9,30),local(2026,8,24,9,40),false,"c","X")
  };
- ReportDefinition top=d;top.groups={GroupField::Category,GroupField::Process};top.topN=1;auto tr=buildReport(topRows,top);assert(tr.grandTotal.totalSeconds==6000);long long visible=0;bool other=false;for(const auto&row:tr.rows)if(row.kind==RowKind::Detail){visible+=row.values.totalSeconds;if(!row.keys.empty()&&row.keys.back()=="Остальные")other=true;}assert(visible==6000);assert(other);
+ ReportDefinition top=d;top.groups={GroupField::Category,GroupField::Process};top.topN=1;auto tr=buildReport(topRows,top);assert(tr.grandTotal.totalSeconds==6000);long long visible=0;bool other=false;for(const auto&row:tr.rows)if(row.kind==RowKind::Detail){visible+=row.values.totalSeconds;if(!row.keys.empty()&&row.keys.back()=="Остальные (Top N)")other=true;}assert(visible==6000);assert(other);
 
  // A totals-only report must contain exactly one grand-total row (when enabled).
  ReportDefinition totals=d;totals.groups.clear();totals.showGrandTotal=true;auto only=buildReport(rs,totals);assert(only.rows.size()==1);assert(only.rows[0].kind==RowKind::GrandTotal);assert(only.rows[0].values.totalSeconds==9000);
@@ -80,6 +80,33 @@ int main(){
   for(const auto& row:cr.rows)if(row.kind==RowKind::Detail){visible+=row.values.totalSeconds;if(row.keys.back()=="Остальные (Top N)")renamed=true;}
   assert(visible==4500);
   assert(renamed);
+ }
+
+ // Both the base remainder label and its numbered variants may be real groups.
+ {
+  std::vector<ActivityRecord> clash{
+   recAt(50,local(2026,8,24,8,0),local(2026,8,24,8,10),false,"Остальные (Top N)","X"),
+   recAt(51,local(2026,8,24,9,0),local(2026,8,24,9,5),false,"Остальные (Top N) #2","X"),
+   recAt(52,local(2026,8,24,10,0),local(2026,8,24,10,1),false,"third","X")
+  };
+  auto collision=d;collision.groups={GroupField::Process};collision.topN=1;collision.showGrandTotal=false;
+  const auto report=buildReport(clash,collision);
+  assert(report.rows.size()==2);
+  assert(report.rows[0].keys[0]=="Остальные (Top N)"&&report.rows[0].values.totalSeconds==600);
+  assert(report.rows[1].keys[0]=="Остальные (Top N) #3"&&report.rows[1].values.totalSeconds==360);
+  assert(report.grandTotal.totalSeconds==960&&report.grandTotal.recordCount==3);
+ }
+
+ // The Today view uses ReportEngine semantics: clip midnight and choose the top active app,
+ // rather than ranking by total time (which could select an idle-only process).
+ {
+  const auto midnight=local(2026,8,24,0,0);
+  const auto summary=buildTodaySummary({
+   recAt(60,local(2026,8,23,23,50),local(2026,8,24,0,10),false,"editor","X"),
+   recAt(61,local(2026,8,24,0,10),local(2026,8,24,1,0),true,"browser","X")
+  },midnight,local(2026,8,24,1,0));
+  assert(summary.values.activeSeconds==600&&summary.values.idleSeconds==3000);
+  assert(summary.topProcess=="editor"&&summary.topActiveSeconds==600);
  }
 
  std::cout<<"report tests passed\n";

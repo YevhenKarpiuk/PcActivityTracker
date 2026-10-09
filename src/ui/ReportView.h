@@ -1,6 +1,6 @@
 #pragma once
 #include "core/ActivityRecord.h"
-#include "core/IActivityRepository.h"
+#include "core/ActivityMonitor.h"
 #include "reports/ReportTypes.h"
 
 #include <array>
@@ -15,7 +15,7 @@ public:
     // Каталог для CSV/JSON выгрузок. Без него экспорт ушёл бы в текущий каталог процесса,
     // который у GUI-приложения не совпадает с каталогом программы.
     void setExportDirectory(std::filesystem::path directory){exportDirectory_=std::move(directory);}
-    void draw(IActivityRepository& repository,const std::optional<ActivityRecord>& liveRecord);
+    void draw(ActivityMonitor& monitor);
 private:
     enum class ChartType { Bars, Line, Pie };
     ReportDefinition def_{};
@@ -35,6 +35,6 @@ private:
     std::filesystem::path exportDirectory_;
     std::string status_;
     void initialize();
-    void rebuild(IActivityRepository& repository,const std::optional<ActivityRecord>& liveRecord);
+    void rebuild(ActivityMonitor& monitor);
 };
 }

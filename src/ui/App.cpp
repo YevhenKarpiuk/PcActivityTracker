@@ -10,6 +10,7 @@
 #include "core/ActivityMonitor.h"
 #include "core/TextUtil.h"
 #include "core/TimeUtil.h"
+#include "reports/ReportEngine.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_tray.h>
@@ -112,7 +113,6 @@ void mutateHistorySafely(ActivityMonitor& monitor, Fn&& operation) {
 }
 
 std::chrono::system_clock::time_point localMidnight(std::chrono::system_clock::time_point now){auto tm=timeutil::localTm(now);tm.tm_hour=tm.tm_min=tm.tm_sec=0;return timeutil::fromLocalTm(tm);}
-long long overlapSeconds(const ActivityRecord& record,std::chrono::system_clock::time_point begin,std::chrono::system_clock::time_point end){const auto start=std::max(record.startTime,begin);const auto finish=std::min(record.endTime,end);return finish>start?std::chrono::duration_cast<std::chrono::seconds>(finish-start).count():0;}
 bool matchesHistory(const ActivityRecord& r,const char* process,const char* category,const char* title){return textutil::containsCaseInsensitive(r.processName,process?process:"")&&textutil::containsCaseInsensitive(r.category,category?category:"")&&textutil::containsCaseInsensitive(r.windowTitle,title?title:"");}
 }
 
@@ -124,8 +124,9 @@ int runApp(const std::filesystem::path& executablePath){
     for(const auto& warning:settingsService.lastLoadWarnings()){if(!startupStatus.empty())startupStatus+=" | ";startupStatus+="settings.json: "+warning;}
     // Записи, чьё время не удалось восстановить, не попадают ни в один период. Молча терять их нельзя.
     try{if(const auto undated=repo.undatedRecordCount();undated>0){if(!startupStatus.empty())startupStatus+=" | ";startupStatus+="Записей с нечитаемой датой: "+std::to_string(undated)+" (не отображаются в истории и отчётах)";}}catch(const std::exception&){}
+    std::atomic_bool dataDirty{true};
     auto provider=createActivityProvider();ActivityMonitor monitor(*provider,repo,settings);
-    std::atomic_bool dataDirty{true};monitor.setRecordCallback([&](const ActivityRecord&){dataDirty.store(true);});monitor.start();
+    monitor.setRecordCallback([&](const ActivityRecord&){dataDirty.store(true);});monitor.start();
 
     if(!SDL_Init(SDL_INIT_VIDEO)){monitor.stop();throw std::runtime_error(std::string("SDL initialization failed: ")+SDL_GetError());}
     SDL_Window* window=SDL_CreateWindow("PcActivityTracker",1280,760,SDL_WINDOW_RESIZABLE);if(!window){monitor.stop();const std::string error=SDL_GetError();SDL_Quit();throw std::runtime_error("Cannot create application window: "+error);}
@@ -140,6 +141,10 @@ int runApp(const std::filesystem::path& executablePath){
 
     bool done=false;ReportView reportView;reportView.setExportDirectory(dataDir);std::vector<ActivityRecord> todayRecords,historyRecords;int historyDays=30;auto historyStart=std::chrono::system_clock::now()-std::chrono::hours(24*historyDays);std::string uiStatus=std::move(startupStatus);
     std::array<char,128> historyProcess{},historyCategory{};std::array<char,256> historyTitle{};
+    std::vector<std::size_t> filteredHistory;
+    bool historyFilterDirty=true,summaryDirty=true;
+    TodaySummary summary;
+    auto lastSummary=std::chrono::steady_clock::time_point{};
     AppSettings draftSettings=settings;
     std::string excludedProcesses=joinLines(settings.excludedProcesses);
     std::string excludedTitles=joinLines(settings.excludedWindowTitles);
@@ -153,7 +158,7 @@ int runApp(const std::filesystem::path& executablePath){
     // Кнопка «Обновить данные» и смена периода перечитывают немедленно.
     auto lastReload=std::chrono::steady_clock::now();
     constexpr auto reloadInterval=std::chrono::seconds(5);
-    auto reloadData=[&]{const auto now=std::chrono::system_clock::now();historyDays=std::clamp(historyDays,1,3650);historyStart=now-std::chrono::hours(24LL*historyDays);todayRecords=repo.getRecords(localMidnight(now),now+std::chrono::seconds(1));historyRecords=repo.getRecords(historyStart,now+std::chrono::seconds(1));lastReload=std::chrono::steady_clock::now();};dataDirty.store(false);reloadData();
+    auto reloadData=[&]{const auto now=std::chrono::system_clock::now();historyDays=std::clamp(historyDays,1,3650);historyStart=now-std::chrono::hours(24LL*historyDays);historyRecords=monitor.readSnapshot(historyStart,now+std::chrono::seconds(1)).records;todayRecords.clear();const auto midnight=localMidnight(now);for(const auto& record:historyRecords)if(record.endTime>midnight)todayRecords.push_back(record);filteredHistory.clear();historyFilterDirty=true;summaryDirty=true;lastReload=std::chrono::steady_clock::now();};dataDirty.store(false);reloadData();
 
     // Трею нужен свой размер: SDL масштабирует хуже, чем сама Windows при извлечении из .ico,
     // где для мелких размеров лежат отдельно отрисованные варианты.
@@ -179,8 +184,13 @@ int runApp(const std::filesystem::path& executablePath){
 
         if(ImGui::BeginTabBar("tabs")){
             if(ImGui::BeginTabItem("Сегодня")){
-                const auto summaryNow=std::chrono::system_clock::now();const auto todayStart=localMidnight(summaryNow);auto live=monitor.currentRecordPreview(summaryNow);long long active=0,idle=0;std::map<std::string,long long> apps;for(const auto&r:todayRecords){const auto seconds=overlapSeconds(r,todayStart,summaryNow);(r.isIdle?idle:active)+=seconds;if(!r.isIdle)apps[r.processName]+=seconds;}if(live){const auto seconds=overlapSeconds(*live,todayStart,summaryNow);(live->isIdle?idle:active)+=seconds;if(!live->isIdle)apps[live->processName]+=seconds;}
-                ImGui::Text("Активно: %s",timeutil::formatDuration(active).c_str());ImGui::SameLine();ImGui::Text("Простой: %s",timeutil::formatDuration(idle).c_str());if(!apps.empty()){const auto top=std::max_element(apps.begin(),apps.end(),[](const auto&a,const auto&b){return a.second<b.second;});ImGui::Text("Самая активная программа: %s (%s)",top->first.c_str(),timeutil::formatDuration(top->second).c_str());}
+                const auto summaryNow=std::chrono::system_clock::now();auto live=monitor.currentRecordPreview(summaryNow);
+                if(summaryDirty||std::chrono::steady_clock::now()-lastSummary>=std::chrono::seconds(1)){
+                    auto records=todayRecords;if(live)records.push_back(*live);
+                    summary=buildTodaySummary(records,localMidnight(summaryNow),summaryNow);
+                    lastSummary=std::chrono::steady_clock::now();summaryDirty=false;
+                }
+                ImGui::Text("Активно: %s",timeutil::formatDuration(summary.values.activeSeconds).c_str());ImGui::SameLine();ImGui::Text("Простой: %s",timeutil::formatDuration(summary.values.idleSeconds).c_str());if(!summary.topProcess.empty()){ImGui::Text("Самая активная программа: %s (%s)",summary.topProcess.c_str(),timeutil::formatDuration(summary.topActiveSeconds).c_str());}
                 ImGui::Separator();if(live){ImGui::TextColored(ImVec4(0.65f,0.9f,0.65f,1),"Сейчас: %s | %s | %s",live->processName.c_str(),live->category.c_str(),timeutil::formatDuration(live->durationSeconds).c_str());}
                 // Список за день может содержать тысячи интервалов: рисуем только видимые строки.
                 {ImGuiListClipper clipper;clipper.Begin(static_cast<int>(todayRecords.size()));
@@ -188,18 +198,20 @@ int runApp(const std::filesystem::path& executablePath){
                 ImGui::EndTabItem();
             }
             if(ImGui::BeginTabItem("История")){
-                ImGui::SetNextItemWidth(100);if(ImGui::InputInt("Дней",&historyDays)){historyDays=std::clamp(historyDays,1,3650);try{reloadData();}catch(const std::exception&e){uiStatus=e.what();}}ImGui::SameLine();ImGui::SetNextItemWidth(170);ImGui::InputText("Программа##history",historyProcess.data(),historyProcess.size());ImGui::SameLine();ImGui::SetNextItemWidth(170);ImGui::InputText("Категория##history",historyCategory.data(),historyCategory.size());ImGui::SameLine();ImGui::SetNextItemWidth(240);ImGui::InputText("Окно##history",historyTitle.data(),historyTitle.size());ImGui::SameLine();if(ImGui::Button("Применить период")){try{reloadData();}catch(const std::exception&e){uiStatus=e.what();}}
-                std::vector<ActivityRecord> filtered;filtered.reserve(historyRecords.size()+1);if(auto live=monitor.currentRecordPreview();live&&live->endTime>historyStart&&matchesHistory(*live,historyProcess.data(),historyCategory.data(),historyTitle.data()))filtered.push_back(*live);for(const auto&r:historyRecords)if(matchesHistory(r,historyProcess.data(),historyCategory.data(),historyTitle.data()))filtered.push_back(r);
-                if(ImGui::Button("Экспорт CSV")){try{const auto file=dataDir/"history.csv";exportActivityCsv(filtered,file);uiStatus="Сохранено: "+pathUtf8(file);}catch(const std::exception&e){uiStatus=e.what();}}ImGui::SameLine();if(ImGui::Button("Экспорт JSON")){try{const auto file=dataDir/"history.json";exportActivityJson(filtered,file);uiStatus="Сохранено: "+pathUtf8(file);}catch(const std::exception&e){uiStatus=e.what();}}ImGui::SameLine();if(ImGui::Button("Удалить по фильтру"))ImGui::OpenPopup("delete-filtered");ImGui::SameLine();if(ImGui::Button("Очистить всю историю"))ImGui::OpenPopup("delete-all");
+                ImGui::SetNextItemWidth(100);if(ImGui::InputInt("Дней",&historyDays)){historyDays=std::clamp(historyDays,1,3650);try{reloadData();}catch(const std::exception&e){uiStatus=e.what();}}ImGui::SameLine();ImGui::SetNextItemWidth(170);historyFilterDirty|=ImGui::InputText("Программа##history",historyProcess.data(),historyProcess.size());ImGui::SameLine();ImGui::SetNextItemWidth(170);historyFilterDirty|=ImGui::InputText("Категория##history",historyCategory.data(),historyCategory.size());ImGui::SameLine();ImGui::SetNextItemWidth(240);historyFilterDirty|=ImGui::InputText("Окно##history",historyTitle.data(),historyTitle.size());ImGui::SameLine();if(ImGui::Button("Применить период")){try{reloadData();}catch(const std::exception&e){uiStatus=e.what();}}
+                if(historyFilterDirty){filteredHistory.clear();for(std::size_t i=0;i<historyRecords.size();++i)if(matchesHistory(historyRecords[i],historyProcess.data(),historyCategory.data(),historyTitle.data()))filteredHistory.push_back(i);historyFilterDirty=false;}
+                auto live=monitor.currentRecordPreview();if(live&&(live->endTime<=historyStart||!matchesHistory(*live,historyProcess.data(),historyCategory.data(),historyTitle.data())))live.reset();
+                const auto exportRows=[&]{std::vector<ActivityRecord> rows;rows.reserve(filteredHistory.size()+1);if(live)rows.push_back(*live);for(auto index:filteredHistory)rows.push_back(historyRecords[index]);return rows;};
+                if(ImGui::Button("Экспорт CSV")){try{const auto file=dataDir/"history.csv";exportActivityCsv(exportRows(),file);uiStatus="Сохранено: "+pathUtf8(file);}catch(const std::exception&e){uiStatus=e.what();}}ImGui::SameLine();if(ImGui::Button("Экспорт JSON")){try{const auto file=dataDir/"history.json";exportActivityJson(exportRows(),file);uiStatus="Сохранено: "+pathUtf8(file);}catch(const std::exception&e){uiStatus=e.what();}}ImGui::SameLine();if(ImGui::Button("Удалить по фильтру"))ImGui::OpenPopup("delete-filtered");ImGui::SameLine();if(ImGui::Button("Очистить всю историю"))ImGui::OpenPopup("delete-all");
                 if(ImGui::BeginPopupModal("delete-filtered",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){ImGui::Text("Удалить записи за выбранный период, соответствующие фильтрам?\nЭто действие нельзя отменить.");if(ImGui::Button("Удалить")){try{int count=0;mutateHistorySafely(monitor,[&]{const auto now=std::chrono::system_clock::now();count=repo.deleteByFilter(historyStart,now+std::chrono::seconds(1),historyProcess.data(),historyCategory.data(),historyTitle.data());});uiStatus="Удалено записей: "+std::to_string(count);reloadData();}catch(const std::exception&e){uiStatus=e.what();}ImGui::CloseCurrentPopup();}ImGui::SameLine();if(ImGui::Button("Отмена"))ImGui::CloseCurrentPopup();ImGui::EndPopup();}
                 if(ImGui::BeginPopupModal("delete-all",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){ImGui::Text("Удалить ВСЮ историю активности?\nЭто действие нельзя отменить.");if(ImGui::Button("Удалить всё")){try{mutateHistorySafely(monitor,[&]{repo.deleteAll();});uiStatus="История очищена";reloadData();}catch(const std::exception&e){uiStatus=e.what();}ImGui::CloseCurrentPopup();}ImGui::SameLine();if(ImGui::Button("Отмена"))ImGui::CloseCurrentPopup();ImGui::EndPopup();}
                 if(ImGui::BeginTable("history",6,ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg|ImGuiTableFlags_ScrollY|ImGuiTableFlags_Resizable,ImVec2(0,470))){ImGui::TableSetupColumn("Начало");ImGui::TableSetupColumn("Программа");ImGui::TableSetupColumn("Категория");ImGui::TableSetupColumn("Окно");ImGui::TableSetupColumn("Статус");ImGui::TableSetupColumn("Длительность");ImGui::TableHeadersRow();
-                    ImGuiListClipper clipper;clipper.Begin(static_cast<int>(filtered.size()));
-                    while(clipper.Step())for(int i=clipper.DisplayStart;i<clipper.DisplayEnd;++i){const auto&r=filtered[static_cast<std::size_t>(i)];ImGui::TableNextRow();ImGui::TableNextColumn();ImGui::TextUnformatted(timeutil::toIso8601Utc(r.startTime).c_str());ImGui::TableNextColumn();ImGui::TextUnformatted(r.processName.c_str());ImGui::TableNextColumn();ImGui::TextUnformatted(r.category.c_str());ImGui::TableNextColumn();ImGui::TextUnformatted(r.windowTitle.c_str());ImGui::TableNextColumn();ImGui::TextUnformatted(r.isIdle?"Простой":"Активно");ImGui::TableNextColumn();ImGui::TextUnformatted(timeutil::formatDuration(r.durationSeconds).c_str());}
+                    ImGuiListClipper clipper;clipper.Begin(static_cast<int>(filteredHistory.size()+(live?1:0)));
+                    while(clipper.Step())for(int i=clipper.DisplayStart;i<clipper.DisplayEnd;++i){const auto&r=(live&&i==0)?*live:historyRecords[filteredHistory[static_cast<std::size_t>(i)-(live?1:0)]];ImGui::TableNextRow();ImGui::TableNextColumn();ImGui::TextUnformatted(timeutil::toIso8601Utc(r.startTime).c_str());ImGui::TableNextColumn();ImGui::TextUnformatted(r.processName.c_str());ImGui::TableNextColumn();ImGui::TextUnformatted(r.category.c_str());ImGui::TableNextColumn();ImGui::TextUnformatted(r.windowTitle.c_str());ImGui::TableNextColumn();ImGui::TextUnformatted(r.isIdle?"Простой":"Активно");ImGui::TableNextColumn();ImGui::TextUnformatted(timeutil::formatDuration(r.durationSeconds).c_str());}
                     ImGui::EndTable();}
                 ImGui::EndTabItem();
             }
-            if(ImGui::BeginTabItem("Отчёты")){reportView.draw(repo,monitor.currentRecordPreview());ImGui::EndTabItem();}
+            if(ImGui::BeginTabItem("Отчёты")){reportView.draw(monitor);ImGui::EndTabItem();}
             if(ImGui::BeginTabItem("Настройки")){
                 int idle=draftSettings.idleThresholdSeconds,poll=draftSettings.pollingIntervalSeconds;bool hide=draftSettings.hideBrowserWindowTitles,startWithSystem=draftSettings.startWithSystem;if(ImGui::InputInt("Порог простоя, сек",&idle))draftSettings.idleThresholdSeconds=std::max(10,idle);if(ImGui::InputInt("Интервал опроса, сек",&poll))draftSettings.pollingIntervalSeconds=std::clamp(poll,1,60);ImGui::Checkbox("Скрывать заголовки браузера",&hide);draftSettings.hideBrowserWindowTitles=hide;ImGui::Checkbox("Запускать вместе с системой",&startWithSystem);draftSettings.startWithSystem=startWithSystem;
                 ImGui::SeparatorText("Исключения и категории");ImGui::TextUnformatted("По одному значению на строку. Шаблоны окон: wildcard или regex:...");ImGui::InputTextMultiline("Исключённые программы",&excludedProcesses,ImVec2(300,90));ImGui::SameLine();ImGui::InputTextMultiline("Точные заголовки окон",&excludedTitles,ImVec2(300,90));ImGui::SameLine();ImGui::InputTextMultiline("Шаблоны заголовков",&excludedPatterns,ImVec2(300,90));ImGui::InputTextMultiline("Исключённые домены",&excludedDomains,ImVec2(300,90));ImGui::SameLine();ImGui::InputTextMultiline("Категории: приложение=категория",&categories,ImVec2(420,120));

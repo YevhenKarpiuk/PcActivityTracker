@@ -28,7 +28,7 @@ public:
 
 class RetryRepository final : public IActivityRepository {
 public:
-    int failuresRemaining{2};
+    std::atomic_int failuresRemaining{2};
     std::vector<ActivityRecord> records;
     void insert(const ActivityRecord& record) override { records.push_back(record); }
     void commitClosedRecord(const ActivityRecord& record) override {
@@ -39,6 +39,32 @@ public:
     int deleteByFilter(std::chrono::system_clock::time_point,std::chrono::system_clock::time_point,const std::string&,const std::string&,const std::string&) override { return 0; }
     void deleteAll() override { records.clear(); }
 };
+
+class ScriptedProvider final : public IActivityProvider {
+public:
+    std::atomic_int captures{};
+    std::atomic_llong seconds{};
+    std::chrono::system_clock::time_point base=timeutil::parseIso8601("2026-10-09T08:00:00Z");
+    ActivitySnapshot capture() override {
+        const int step=captures.load();
+        if(step<3)seconds.store(step==0?0:step==1?2:3602);
+        ActivitySnapshot snapshot;
+        snapshot.processName="chrome.exe";
+        snapshot.windowTitle="Same title";
+        snapshot.browserDomain="example.com";
+        snapshot.browserUrl=step==0?"https://example.com/a":"https://example.com/b";
+        captures.fetch_add(1);
+        return snapshot;
+    }
+    ProviderCapabilities capabilities() const override { return {}; }
+};
+
+void waitForCaptures(const ScriptedProvider& provider,int count) {
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+    while(provider.captures.load()<count&&std::chrono::steady_clock::now()<deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    assert(provider.captures.load()>=count);
+}
 }
 
 int main() {
@@ -114,6 +140,42 @@ int main() {
         monitor.stop();
         assert(repository.records.size()==1);
         assert(repository.records[0].durationSeconds>=1);
+    }
+
+    // Navigation with an unchanged title/domain still closes the old URL interval. A simulated
+    // one-hour suspend must leave a gap, and previews/pause/stop must not extrapolate through it.
+    {
+        ScriptedProvider provider;
+        RetryRepository repository;repository.failuresRemaining=0;
+        AppSettings monitorSettings;monitorSettings.pollingIntervalSeconds=1;monitorSettings.hideBrowserWindowTitles=false;
+        ActivityMonitor monitor(provider,repository,monitorSettings,[&]{return provider.base+std::chrono::seconds(provider.seconds.load());});
+        monitor.start();
+        waitForCaptures(provider,3);
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+        while(std::chrono::steady_clock::now()<deadline) {
+            const auto current=monitor.currentRecordPreview(provider.base+std::chrono::hours(2));
+            if(current&&current->startTime==provider.base+std::chrono::seconds(3602))break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        auto snapshot=monitor.readSnapshot(provider.base,provider.base+std::chrono::hours(2));
+        assert(snapshot.records.size()==2);
+        assert(snapshot.records[0].browserUrl=="https://example.com/a"&&snapshot.records[0].durationSeconds==2);
+        assert(snapshot.records[1].browserUrl=="https://example.com/b"&&snapshot.records[1].durationSeconds==1);
+        const auto preview=monitor.currentRecordPreview(provider.base+std::chrono::hours(2));
+        assert(preview&&preview->startTime==provider.base+std::chrono::seconds(3602)&&preview->durationSeconds==1);
+        // Close while writes fail: the read snapshot must still include queued records exactly once.
+        repository.failuresRemaining=100;
+        provider.seconds.store(3603);
+        monitor.setPaused(true);
+        snapshot=monitor.readSnapshot(provider.base,provider.base+std::chrono::hours(2));
+        assert(!snapshot.current&&snapshot.records.size()==3);
+        long long total=0;for(const auto& record:snapshot.records)total+=record.durationSeconds;
+        assert(total==4);
+        // Stop joins capture before changing the fake repository's retry policy.
+        monitor.stop();repository.failuresRemaining=0;monitor.stop();
+        snapshot=monitor.readSnapshot(provider.base,provider.base+std::chrono::hours(2));
+        assert(!snapshot.current&&snapshot.records.size()==3);
+        assert(monitor.lastError().empty());
     }
 
     std::cout << "core tests passed\n";

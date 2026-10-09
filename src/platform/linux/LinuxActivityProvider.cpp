@@ -30,6 +30,7 @@ std::string windowUtf8Title(Display* display, Window window) {
                                &actualType, &actualFormat, &itemCount, &bytesAfter, &data) == Success && data) {
             std::string result(reinterpret_cast<char*>(data), itemCount);
             XFree(data);
+            data = nullptr;
             if (!result.empty()) return result;
         }
         if (data) XFree(data);

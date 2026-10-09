@@ -282,11 +282,14 @@ std::map<Key, Agg> applyTopN(const std::map<Key, Agg>& source, int topN, Metric 
         if (other.total > 0) {
             // Реальная группа может называться «Остальные». Без отдельной метки технический
             // остаток перезаписал бы её агрегат и часть времени просто исчезла бы из отчёта.
-            std::string label = "Остальные";
-            const bool clashes = std::any_of(items.begin(), items.end(), [&label](const auto& item) {
-                return !item.first.empty() && item.first.back() == label;
-            });
-            if (clashes) label = "Остальные (Top N)";
+            const std::string baseLabel = "Остальные (Top N)";
+            std::string label = baseLabel;
+            const auto clashes = [&items](const std::string& candidate) {
+                return std::any_of(items.begin(), items.end(), [&candidate](const auto& item) {
+                    return !item.first.empty() && item.first.back() == candidate;
+                });
+            };
+            for(int suffix=2;clashes(label);++suffix)label=baseLabel+" #"+std::to_string(suffix);
 
             Key otherKey = parent;
             otherKey.push_back(std::move(label));
@@ -435,6 +438,27 @@ ReportResult buildReport(const std::vector<ActivityRecord>& records, const Repor
         result.rows.push_back({RowKind::GrandTotal, 0, {"ИТОГО"}, result.grandTotal});
     }
     return result;
+}
+
+TodaySummary buildTodaySummary(const std::vector<ActivityRecord>& records,
+                              std::chrono::system_clock::time_point start,
+                              std::chrono::system_clock::time_point end) {
+    ReportDefinition definition;
+    definition.start=start;
+    definition.end=end;
+    definition.groups={GroupField::Process};
+    definition.sortMetric=Metric::ActiveSeconds;
+    definition.sortDescending=true;
+    definition.showGrandTotal=false;
+    definition.showSubtotals=false;
+    const auto report=buildReport(records,definition);
+    TodaySummary summary;
+    summary.values=report.grandTotal;
+    if(!report.rows.empty()&&report.rows.front().values.activeSeconds>0) {
+        summary.topProcess=report.rows.front().keys.front();
+        summary.topActiveSeconds=report.rows.front().values.activeSeconds;
+    }
+    return summary;
 }
 
 } // namespace pcat

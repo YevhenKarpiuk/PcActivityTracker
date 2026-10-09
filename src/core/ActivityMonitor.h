@@ -13,10 +13,17 @@
 #include <thread>
 
 namespace pcat {
+struct ActivityReadSnapshot {
+    std::vector<ActivityRecord> records;
+    std::optional<ActivityRecord> current;
+};
+
 class ActivityMonitor {
 public:
     using RecordCallback = std::function<void(const ActivityRecord&)>;
-    ActivityMonitor(IActivityProvider& provider, IActivityRepository& repository, AppSettings settings);
+    using Clock = std::function<std::chrono::system_clock::time_point()>;
+    ActivityMonitor(IActivityProvider& provider, IActivityRepository& repository, AppSettings settings,
+                    Clock clock = std::chrono::system_clock::now);
     ~ActivityMonitor() noexcept;
     void start();
     void stop() noexcept;
@@ -30,6 +37,9 @@ public:
     void setSettings(const AppSettings& settings);
     void setRecordCallback(RecordCallback cb);
     std::optional<ActivityRecord> currentRecordPreview(std::chrono::system_clock::time_point now = std::chrono::system_clock::now()) const;
+    // Read durable, queued and live intervals under the same transition/persistence boundary.
+    ActivityReadSnapshot readSnapshot(std::chrono::system_clock::time_point start,
+                                      std::chrono::system_clock::time_point end);
     std::string lastError() const;
 private:
     void loop(std::stop_token token);
@@ -40,9 +50,11 @@ private:
     bool flushPending();
     void checkpointCurrent(std::chrono::system_clock::time_point now);
     void setError(std::string message);
+    std::chrono::system_clock::time_point observedEnd(std::chrono::system_clock::time_point end) const;
 
     IActivityProvider& provider_;
     IActivityRepository& repository_;
+    Clock clock_;
     mutable std::mutex mutex_;
     std::mutex processMutex_;
     std::mutex persistenceMutex_;

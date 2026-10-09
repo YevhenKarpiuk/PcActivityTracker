@@ -59,19 +59,10 @@ public:
     UiAutomationContext(const UiAutomationContext&) = delete;
     UiAutomationContext& operator=(const UiAutomationContext&) = delete;
 
-    // Обход дерева UI Automation — самая дорогая часть опроса, а активное окно браузера
-    // обычно не меняется между опросами. Результат кэшируется по паре окно+заголовок:
-    // при переходе на другую страницу заголовок меняется, и кэш сам инвалидируется.
-    // Отрицательный результат тоже кэшируется, иначе окно без адресной строки заставляло бы
-    // обходить дерево каждые несколько секунд.
-    std::optional<BrowserAddress> addressBar(HWND window, const std::wstring& title) {
-        if (cacheValid_ && window == cachedWindow_ && title == cachedTitle_) return cachedAddress_;
-        auto result = queryAddressBar(window);
-        cachedWindow_ = window;
-        cachedTitle_ = title;
-        cachedAddress_ = result;
-        cacheValid_ = true;
-        return result;
+    // A browser may navigate without changing its title, and a failed query may recover later.
+    // Read the current address each poll instead of caching a URL by HWND/title indefinitely.
+    std::optional<BrowserAddress> addressBar(HWND window) const {
+        return queryAddressBar(window);
     }
 
 private:
@@ -132,10 +123,6 @@ private:
 
     IUIAutomation* automation_{};
     bool uninitialize_{};
-    HWND cachedWindow_{};
-    std::wstring cachedTitle_;
-    std::optional<BrowserAddress> cachedAddress_;
-    bool cacheValid_{};
 };
 
 UiAutomationContext& uiAutomation() {
@@ -187,7 +174,7 @@ public:
         }
 
         if (isBrowserProcess(snapshot.processName)) {
-            auto address = uiAutomation().addressBar(window, title);
+            auto address = uiAutomation().addressBar(window);
             if (!address) address = findBrowserAddressInText(snapshot.windowTitle);
             if (address) {
                 snapshot.browserUrl = std::move(address->url);

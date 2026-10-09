@@ -10,8 +10,8 @@
 namespace pcat {
 namespace { constexpr auto checkpointInterval = std::chrono::seconds(30); }
 
-ActivityMonitor::ActivityMonitor(IActivityProvider& provider,IActivityRepository& repository,AppSettings settings)
-    :provider_(provider),repository_(repository),settings_(std::move(settings)),categoryIndex_(buildCategoryIndex(settings_.categories)){}
+ActivityMonitor::ActivityMonitor(IActivityProvider& provider,IActivityRepository& repository,AppSettings settings,Clock clock)
+    :provider_(provider),repository_(repository),clock_(std::move(clock)),settings_(std::move(settings)),categoryIndex_(buildCategoryIndex(settings_.categories)){}
 ActivityMonitor::~ActivityMonitor() noexcept { stop(); }
 
 void ActivityMonitor::start(){
@@ -30,7 +30,7 @@ void ActivityMonitor::stop() noexcept {
         if(wasRunning && thread_.joinable()){thread_.request_stop();thread_.join();}
         // Always attempt the final close/flush, even on a repeated stop(). A previous stop may have
         // failed because SQLite was temporarily unavailable and left durable work in pending_.
-        closeCurrent(std::chrono::system_clock::now());
+        closeCurrent(clock_());
         flushPending();
     } catch(const std::exception& e) { setError(e.what()); }
     catch(...) { setError("Unknown error while stopping activity monitor"); }
@@ -46,7 +46,7 @@ void ActivityMonitor::setPaused(bool value){
         // Wait for an in-flight capture to finish before closing the interval. Without this guard an
         // already-running process() could create a new current interval after the UI had paused us.
         std::scoped_lock processLock(processMutex_);
-        closeCurrent(std::chrono::system_clock::now());
+        closeCurrent(clock_());
     }
 }
 
@@ -54,7 +54,7 @@ bool ActivityMonitor::pauseAndFlushForMaintenance() noexcept {
     try {
         paused_.store(true);
         std::scoped_lock processLock(processMutex_);
-        closeCurrent(std::chrono::system_clock::now());
+        closeCurrent(clock_());
         return flushPending();
     } catch(const std::exception& e) {
         setError(e.what());
@@ -74,7 +74,32 @@ ActivityRecord ActivityMonitor::makeRecord(const ActivitySnapshot& snapshot,cons
 }
 
 std::optional<ActivityRecord> ActivityMonitor::currentRecordPreview(std::chrono::system_clock::time_point now) const {
-    std::scoped_lock lock(mutex_);if(!current_)return std::nullopt;auto end=std::max(now,currentStart_);auto record=makeRecord(*current_,currentCategory_,currentStart_,end);if(record.durationSeconds<=0)return std::nullopt;return record;
+    std::scoped_lock lock(mutex_);if(!current_)return std::nullopt;auto record=makeRecord(*current_,currentCategory_,currentStart_,observedEnd(now));if(record.durationSeconds<=0)return std::nullopt;return record;
+}
+
+std::chrono::system_clock::time_point ActivityMonitor::observedEnd(std::chrono::system_clock::time_point end) const {
+    // Bound extrapolation to one polling interval. Long gaps (sleep, capture errors or slow OS APIs)
+    // are not evidence that the previously observed application remained active throughout them.
+    return std::max(currentStart_,std::min(end,current_->timestamp
+        + std::chrono::seconds(std::clamp(settings_.pollingIntervalSeconds,1,60))));
+}
+
+ActivityReadSnapshot ActivityMonitor::readSnapshot(std::chrono::system_clock::time_point start,
+                                                  std::chrono::system_clock::time_point end) {
+    // Block commits, not capture: a slow OS window query must not hold up readers. Transitions
+    // can still enqueue a closed interval; pending_ and current_ are copied together below.
+    std::scoped_lock persistenceLock(persistenceMutex_);
+    ActivityReadSnapshot result;
+    result.records=repository_.getRecords(start,end);
+    std::scoped_lock lock(mutex_);
+    for(const auto& record:pending_) {
+        if(record.endTime>start&&record.startTime<end)result.records.push_back(record);
+    }
+    if(current_) {
+        auto record=makeRecord(*current_,currentCategory_,currentStart_,observedEnd(clock_()));
+        if(record.durationSeconds>0&&record.endTime>start&&record.startTime<end)result.current=std::move(record);
+    }
+    return result;
 }
 
 void ActivityMonitor::loop(std::stop_token token){
@@ -86,15 +111,24 @@ void ActivityMonitor::loop(std::stop_token token){
 }
 
 bool ActivityMonitor::different(const ActivitySnapshot& a,const ActivitySnapshot& b,const std::string& ca,const std::string& cb)const{
-    return a.processName!=b.processName||a.windowTitle!=b.windowTitle||a.browserDomain!=b.browserDomain||a.isIdle!=b.isIdle||ca!=cb;
+    return a.processName!=b.processName||a.windowTitle!=b.windowTitle||a.browserDomain!=b.browserDomain||a.browserUrl!=b.browserUrl||a.exePath!=b.exePath||a.isIdle!=b.isIdle||ca!=cb;
 }
 
 void ActivityMonitor::process(){
     std::scoped_lock processLock(processMutex_);
     const bool pendingPersisted = flushPending();
-    if(paused_.load()){closeCurrent(std::chrono::system_clock::now());return;}
-    auto snapshot=provider_.capture();snapshot.timestamp=std::chrono::system_clock::now();snapshot.processName=normalizeProcessName(snapshot.processName);
+    if(paused_.load()){closeCurrent(clock_());return;}
+    auto snapshot=provider_.capture();snapshot.timestamp=clock_();snapshot.processName=normalizeProcessName(snapshot.processName);
     AppSettings settings;{std::scoped_lock lock(mutex_);settings=settings_;}
+    std::optional<std::chrono::system_clock::time_point> gapEnd;
+    {
+        std::scoped_lock lock(mutex_);
+        if(current_&&(snapshot.timestamp<current_->timestamp||snapshot.timestamp-current_->timestamp
+            >std::chrono::seconds(std::max(5,3*std::clamp(settings.pollingIntervalSeconds,1,60))))) {
+            gapEnd=observedEnd(snapshot.timestamp);
+        }
+    }
+    if(gapEnd)closeCurrent(*gapEnd);
     snapshot.isIdle=snapshot.idleSeconds>=std::max(10,settings.idleThresholdSeconds);
     if(isExcluded(snapshot,settings)){closeCurrent(snapshot.timestamp);return;}
     if(settings.hideBrowserWindowTitles&&isBrowserProcess(snapshot.processName)){snapshot.windowTitle=snapshot.browserDomain.empty()?"Браузер":"Браузер: "+snapshot.browserDomain;snapshot.browserUrl.clear();}
@@ -109,6 +143,8 @@ void ActivityMonitor::process(){
         if(different(*current_,snapshot,currentCategory_,category)){
             auto record=makeRecord(*current_,currentCategory_,currentStart_,snapshot.timestamp);if(record.durationSeconds>0)pending_.push_back(std::move(record));
             current_=snapshot;currentCategory_=category;currentStart_=snapshot.timestamp;lastCheckpoint_=snapshot.timestamp;transitioned=true;
+        } else {
+            current_->timestamp=snapshot.timestamp;
         }
     }
     if(transitioned) {
@@ -151,7 +187,7 @@ void ActivityMonitor::checkpointCurrent(std::chrono::system_clock::time_point no
 void ActivityMonitor::closeCurrent(std::chrono::system_clock::time_point end) noexcept {
     try{
         {
-            std::scoped_lock lock(mutex_);if(!current_)return;auto record=makeRecord(*current_,currentCategory_,currentStart_,end);if(record.durationSeconds>0)pending_.push_back(std::move(record));current_.reset();currentCategory_.clear();lastCheckpoint_={};
+            std::scoped_lock lock(mutex_);if(!current_)return;auto record=makeRecord(*current_,currentCategory_,currentStart_,observedEnd(end));if(record.durationSeconds>0)pending_.push_back(std::move(record));current_.reset();currentCategory_.clear();lastCheckpoint_={};
         }
         flushPending();
     }catch(const std::exception& e){setError(e.what());}catch(...){setError("Unknown error while closing activity interval");}
