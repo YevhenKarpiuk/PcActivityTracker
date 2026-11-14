@@ -1,4 +1,5 @@
 #include "core/ActivityMonitor.h"
+#include "core/AutostartCommand.h"
 #include "core/BrowserAddress.h"
 #include "core/CategoryResolver.h"
 #include "core/ExclusionMatcher.h"
@@ -68,6 +69,22 @@ void waitForCaptures(const ScriptedProvider& provider,int count) {
 }
 
 int main() {
+    // Командная строка автозапуска: путь с пробелами, флаг трея и старая форма .NET-версии.
+    assert(autostartCommandLine("C:\\Program Files\\PCAT\\PcActivityTracker.exe")=="\"C:\\Program Files\\PCAT\\PcActivityTracker.exe\" --autostart");
+    assert(executableFromCommandLine(autostartCommandLine("C:\\a b\\x.exe"))=="C:\\a b\\x.exe");
+    assert(executableFromCommandLine("\"D:\\Tools\\PcActivityTracker.exe\"")=="D:\\Tools\\PcActivityTracker.exe");
+    assert(executableFromCommandLine("  C:\\My Apps\\Tracker.EXE --autostart")=="C:\\My Apps\\Tracker.EXE");
+    assert(executableFromCommandLine("/usr/bin/tracker --autostart")=="/usr/bin/tracker");
+    assert(executableFromCommandLine("").empty());
+    assert(executableFromCommandLine("\"\" --autostart").empty());
+    {
+        const char* withFlag[]={"PcActivityTracker.exe","--autostart"};
+        const char* withoutFlag[]={"PcActivityTracker.exe","--other"};
+        assert(hasAutostartArgument(2,withFlag));
+        assert(!hasAutostartArgument(2,withoutFlag));
+        assert(!hasAutostartArgument(0,nullptr));
+    }
+
     assert(textutil::canonicalApplicationId("C:\\Program Files\\Code.EXE") == "code");
     assert(textutil::canonicalApplicationId("/usr/bin/code") == "code");
     assert(textutil::containsCaseInsensitive("ЗАЯВКА на закупку", "заявка"));

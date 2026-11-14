@@ -7,6 +7,7 @@
 #include "data/SettingsService.h"
 #include "platform/Autostart.h"
 #include "platform/Factory.h"
+#include "platform/SingleInstance.h"
 #include "core/ActivityMonitor.h"
 #include "core/TextUtil.h"
 #include "core/TimeUtil.h"
@@ -116,10 +117,15 @@ std::chrono::system_clock::time_point localMidnight(std::chrono::system_clock::t
 bool matchesHistory(const ActivityRecord& r,const char* process,const char* category,const char* title){return textutil::containsCaseInsensitive(r.processName,process?process:"")&&textutil::containsCaseInsensitive(r.category,category?category:"")&&textutil::containsCaseInsensitive(r.windowTitle,title?title:"");}
 }
 
-int runApp(const std::filesystem::path& executablePath){
+int runApp(const std::filesystem::path& executablePath,const AppLaunchOptions& options){
     const auto executableDirectory=executablePath.has_parent_path()?executablePath.parent_path():std::filesystem::current_path();
-    auto dataDir=appDataDirectory(executableDirectory);ActivityRepository repo(dataDir/"activity_tracker.db");repo.initialize();SettingsService settingsService(dataDir/"settings.json");auto settings=settingsService.load();
-    std::string startupStatus;{std::string autostartError;if(!setAutostart(settings.startWithSystem,executablePath,autostartError))startupStatus="Автозапуск: "+autostartError;}
+    auto dataDir=appDataDirectory(executableDirectory);
+    // Второй процесс на ту же базу удвоил бы записанное время. Вместо этого он просит уже
+    // работающую копию показать окно и выходит. Повторный автозапуск выходит молча.
+    SingleInstance instance(dataDir);
+    if(!instance.isPrimary()){if(!options.startHidden)instance.requestShowPrimary();return 0;}
+    ActivityRepository repo(dataDir/"activity_tracker.db");repo.initialize();SettingsService settingsService(dataDir/"settings.json");auto settings=settingsService.load();
+    std::string startupStatus;{const auto autostart=setAutostart(settings.startWithSystem,executablePath,AutostartReason::Startup);if(!autostart.ok)startupStatus="Автозапуск: "+autostart.error;else if(!autostart.notice.empty())startupStatus="Автозапуск: "+autostart.notice;}
     // Поля settings.json с неверным типом больше не сбрасывают весь файл, поэтому о них надо сказать явно.
     for(const auto& warning:settingsService.lastLoadWarnings()){if(!startupStatus.empty())startupStatus+=" | ";startupStatus+="settings.json: "+warning;}
     // Записи, чьё время не удалось восстановить, не попадают ни в один период. Молча терять их нельзя.
@@ -129,7 +135,7 @@ int runApp(const std::filesystem::path& executablePath){
     monitor.setRecordCallback([&](const ActivityRecord&){dataDirty.store(true);});monitor.start();
 
     if(!SDL_Init(SDL_INIT_VIDEO)){monitor.stop();throw std::runtime_error(std::string("SDL initialization failed: ")+SDL_GetError());}
-    SDL_Window* window=SDL_CreateWindow("PcActivityTracker",1280,760,SDL_WINDOW_RESIZABLE);if(!window){monitor.stop();const std::string error=SDL_GetError();SDL_Quit();throw std::runtime_error("Cannot create application window: "+error);}
+    SDL_Window* window=SDL_CreateWindow("PcActivityTracker",1280,760,SDL_WINDOW_RESIZABLE|(options.startHidden?SDL_WINDOW_HIDDEN:SDL_WindowFlags{0}));if(!window){monitor.stop();const std::string error=SDL_GetError();SDL_Quit();throw std::runtime_error("Cannot create application window: "+error);}
         // Настоящая иконка приложения лежит ресурсом в самом .exe, поэтому окно и трей показывают
     // то же изображение, что проводник и панель задач, а не нарисованный в коде прямоугольник.
     SDL_Surface* appIcon=loadApplicationIconSurface(IconSize::Window);if(!appIcon)appIcon=createFallbackIcon();if(appIcon)SDL_SetWindowIcon(window,appIcon);
@@ -172,8 +178,11 @@ int runApp(const std::filesystem::path& executablePath){
             if(auto* quit=SDL_InsertTrayEntryAt(menu,-1,"Выход",SDL_TRAYENTRY_BUTTON))SDL_SetTrayEntryCallback(quit,trayQuit,&trayContext);
         }else{SDL_DestroyTray(tray);tray=nullptr;}
     }
+    // Без трея скрытое окно было бы невозможно вернуть: показываем его сразу.
+    if(options.startHidden&&!tray)SDL_ShowWindow(window);
 
     while(!done){
+        if(instance.consumeShowRequest()){SDL_ShowWindow(window);SDL_RestoreWindow(window);SDL_RaiseWindow(window);}
         SDL_Event event;while(SDL_PollEvent(&event)){ImGui_ImplSDL3_ProcessEvent(&event);if(event.type==SDL_EVENT_QUIT)done=true;if(event.type==SDL_EVENT_WINDOW_CLOSE_REQUESTED&&event.window.windowID==SDL_GetWindowID(window)){if(tray)SDL_HideWindow(window);else done=true;}}
         if(dataDirty.load()&&std::chrono::steady_clock::now()-lastReload>=reloadInterval){dataDirty.store(false);try{reloadData();}catch(const std::exception&e){uiStatus=e.what();dataDirty.store(true);}}
         ImGui_ImplSDLRenderer3_NewFrame();ImGui_ImplSDL3_NewFrame();ImGui::NewFrame();
@@ -225,19 +234,20 @@ int runApp(const std::filesystem::path& executablePath){
                         candidate.excludedWindowTitlePatterns=splitLines(excludedPatterns.c_str());
                         candidate.excludedBrowserDomains=splitLines(excludedDomains.c_str());
                         candidate.categories=parseCategories(categories.c_str());
-                        std::string error;
-                        if(!setAutostart(candidate.startWithSystem,executablePath,error))throw std::runtime_error(error);
+                        const auto autostart=setAutostart(candidate.startWithSystem,executablePath,AutostartReason::UserChoice);
+                        if(!autostart.ok)throw std::runtime_error("автозапуск: "+autostart.error);
                         autostartTouched=true;
                         settingsService.save(candidate);
                         appliedAutostart=candidate.startWithSystem;
                         settings=candidate;
                         draftSettings=candidate;
                         monitor.setSettings(settings);
-                        uiStatus="Настройки сохранены";
+                        uiStatus=autostart.notice.empty()?std::string("Настройки сохранены"):"Настройки сохранены. Автозапуск: "+autostart.notice;
                     }catch(const std::exception&e){
-                        std::string rollbackError;
-                        if(autostartTouched&&draftSettings.startWithSystem!=previousAutostart&&!setAutostart(previousAutostart,executablePath,rollbackError)){
-                            uiStatus=std::string("Ошибка настроек: ")+e.what()+"; не удалось восстановить автозапуск: "+rollbackError;
+                        AutostartResult rollback;
+                        if(autostartTouched&&draftSettings.startWithSystem!=previousAutostart)rollback=setAutostart(previousAutostart,executablePath,AutostartReason::UserChoice);
+                        if(!rollback.ok){
+                            uiStatus=std::string("Ошибка настроек: ")+e.what()+"; не удалось восстановить автозапуск: "+rollback.error;
                         }else{
                             uiStatus=std::string("Ошибка настроек: ")+e.what();
                         }

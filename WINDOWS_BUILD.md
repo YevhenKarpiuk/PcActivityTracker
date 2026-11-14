@@ -163,7 +163,14 @@ CMake скачивает зафиксированные версии:
 - активное окно: Win32;
 - idle time: `GetLastInputInfo`;
 - browser URL: Windows UI Automation/COM;
-- автозапуск: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+- автозапуск: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, значение `PcActivityTracker`
+  = `"<путь>\PcActivityTracker.exe" --autostart`. С флагом `--autostart` окно не показывается,
+  программа сразу уходит в трей. Если автозапуск отключён в Диспетчере задач
+  (`...\Explorer\StartupApproved\Run`), при старте об этом пишется в статусной строке, а явное
+  сохранение настройки «Запускать вместе с системой» снимает запрет. Копия программы с выключенной
+  галочкой не удаляет запись, которая указывает на другую существующую копию;
+- один экземпляр на каталог данных: именованный mutex `Local\PcActivityTracker-<хеш каталога>`.
+  Повторный запуск не ведёт второй мониторинг в ту же базу, а показывает окно уже работающей копии.
 
 В CMake для Windows подключены `user32`, `psapi`, `advapi32`, `ole32`, `oleaut32`, `uuid`.
 Заголовки `uiautomation.h` и GUID `CLSID_CUIAutomation`/`IID_IUIAutomation` присутствуют

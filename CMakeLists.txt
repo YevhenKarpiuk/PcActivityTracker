@@ -38,6 +38,7 @@ endfunction()
 
 add_library(pcat_core
     src/core/ActivityMonitor.cpp
+    src/core/AutostartCommand.cpp
     src/core/BrowserAddress.cpp
     src/core/CategoryResolver.cpp
     src/core/ExclusionMatcher.cpp
@@ -76,14 +77,14 @@ if(PCAT_BUILD_APP)
     include(cmake/Dependencies.cmake)
 
     if(WIN32)
-        set(PCAT_PLATFORM_SRC src/platform/windows/WindowsActivityProvider.cpp src/platform/windows/Autostart.cpp)
+        set(PCAT_PLATFORM_SRC src/platform/windows/WindowsActivityProvider.cpp src/platform/windows/Autostart.cpp src/platform/windows/SingleInstance.cpp)
     elseif(APPLE)
         enable_language(OBJCXX)
-        set(PCAT_PLATFORM_SRC src/platform/macos/MacActivityProvider.mm src/platform/macos/Autostart.cpp)
+        set(PCAT_PLATFORM_SRC src/platform/macos/MacActivityProvider.mm src/platform/macos/Autostart.cpp src/platform/common/SingleInstance.cpp)
     elseif(UNIX)
-        set(PCAT_PLATFORM_SRC src/platform/linux/LinuxActivityProvider.cpp src/platform/linux/Autostart.cpp)
+        set(PCAT_PLATFORM_SRC src/platform/linux/LinuxActivityProvider.cpp src/platform/linux/Autostart.cpp src/platform/common/SingleInstance.cpp)
     else()
-        set(PCAT_PLATFORM_SRC src/platform/common/NullActivityProvider.cpp src/platform/common/Autostart.cpp)
+        set(PCAT_PLATFORM_SRC src/platform/common/NullActivityProvider.cpp src/platform/common/Autostart.cpp src/platform/common/SingleInstance.cpp)
     endif()
 
     add_library(pcat_platform ${PCAT_PLATFORM_SRC})

@@ -1,4 +1,5 @@
 #include "ui/App.h"
+#include "core/AutostartCommand.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -61,7 +62,9 @@ void showFatalError(const char* message) noexcept {
 
 int main(int argc, char** argv) {
     try {
-        return pcat::runApp(executablePath(argc, argv));
+        pcat::AppLaunchOptions options;
+        options.startHidden = pcat::hasAutostartArgument(argc, argv);
+        return pcat::runApp(executablePath(argc, argv), options);
     } catch (const std::exception& error) {
         showFatalError(error.what());
         return 1;

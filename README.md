@@ -57,7 +57,8 @@ SQLite берётся из системы, если найден `find_package(S
 - чтение старых PascalCase-полей `settings.json`, включая `\\uXXXX` Unicode;
 - portable-режим через `portable.txt` / `data`;
 - Windows active window + idle-time + browser URL через UI Automation;
-- автозапуск Windows;
+- автозапуск Windows со стартом в трее (`--autostart`);
+- защита от второго экземпляра на одну базу;
 - SDL3 tray;
 - вкладки «Сегодня», «История», «Отчёты», «Настройки»;
 - экспорт истории CSV/JSON;
