@@ -1,12 +1,14 @@
 #include <windows.h>
 
+/* Версия берётся из project(VERSION ...) в CMakeLists.txt: единственный источник. */
+
 /* Числовой идентификатор, а не символьное имя: по нему иконку забирает LoadImage
    в src/ui/TrayIcon.cpp. Значение задаётся в CMakeLists.txt (PCAT_ICON_RESOURCE_ID). */
 @PCAT_ICON_RESOURCE_ID@ ICON "@PCAT_ICON_PATH@"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,2,0,0
- PRODUCTVERSION 0,2,0,0
+ FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS VOS_NT_WINDOWS32
@@ -19,11 +21,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "PcActivityTracker Project\0"
             VALUE "FileDescription", "PcActivityTracker\0"
-            VALUE "FileVersion", "0.2.0\0"
+            VALUE "FileVersion", "@PROJECT_VERSION@\0"
             VALUE "InternalName", "PcActivityTracker\0"
             VALUE "OriginalFilename", "PcActivityTracker.exe\0"
             VALUE "ProductName", "PcActivityTracker\0"
-            VALUE "ProductVersion", "0.2.0\0"
+            VALUE "ProductVersion", "@PROJECT_VERSION@\0"
         END
     END
     BLOCK "VarFileInfo"

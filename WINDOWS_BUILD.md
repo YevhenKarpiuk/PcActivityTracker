@@ -215,6 +215,11 @@ Portable-архив содержит `portable.txt`, поэтому режим �
   `PcActivityTracker-windows-x64` с exe и DLL. Пресеты привязаны к `C:\tools`, поэтому CI
   вызывает `cmake` напрямую. Приёмочной остаётся локальная `build_windows.cmd`.
 
+Релиз: Actions → **Release** → Run workflow с тегом `vX.Y.Z`. Тег обязан совпадать с
+`project(VERSION ...)` в `CMakeLists.txt` (оттуда же берётся версия в ресурсах `.exe`), описание —
+`.github/release-notes/vX.Y.Z.md`. Workflow собирает, тестирует, упаковывает portable-ZIP тем же
+составом, что `package_portable.cmd`, проверяет зависимости exe и публикует релиз с `SHA256SUMS.txt`.
+
 ## 8. Если сборка не прошла
 
 Запустите:
