@@ -136,6 +136,11 @@ int main() {
     assert(timeutil::parseIso8601(timeutil::toIso8601Utc(dotnet)) == dotnet);
     const auto beforeEpoch = timeutil::parseIso8601("1969-12-31T23:59:59.5000000Z");
     assert(timeutil::parseIso8601(timeutil::toIso8601Utc(beforeEpoch)) == beforeEpoch);
+    {
+        std::tm local{};
+        local.tm_year=2026-1900;local.tm_mon=7;local.tm_mday=24;local.tm_hour=10;local.tm_min=0;local.tm_sec=5;
+        assert(timeutil::formatLocalDateTime(timeutil::fromLocalTm(local))=="2026-08-24 10:00:05");
+    }
     bool badOffset=false;
     try { (void)timeutil::parseIso8601("2026-08-24T10:00:00+14:30"); } catch (...) { badOffset=true; }
     assert(badOffset);

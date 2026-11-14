@@ -1,5 +1,6 @@
 #include "ui/App.h"
 #include "core/AutostartCommand.h"
+#include "data/AppLog.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -27,7 +28,7 @@ std::filesystem::path executablePath(int argc, char** argv) {
     }
     if (!argument.empty() && argument.has_parent_path()) {
         auto absolute = std::filesystem::absolute(argument, ec);
-        if (!ec) return absolute;
+        if (!ec) return absolute.lexically_normal();
     }
 
     // argv[0] can contain only a file name when the program was found through PATH. SDL knows the
@@ -55,6 +56,7 @@ std::filesystem::path executablePath(int argc, char** argv) {
 
 void showFatalError(const char* message) noexcept {
     if (!message) message = "Unknown fatal error";
+    pcat::applog::error(std::string("Критическая ошибка: ") + message);
     std::fprintf(stderr, "PcActivityTracker: %s\n", message);
     SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "PcActivityTracker", message, nullptr);
 }

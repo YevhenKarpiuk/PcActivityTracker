@@ -1,6 +1,7 @@
 #include "data/ActivityRepository.h"
 #include "data/SettingsService.h"
 #include "data/AppStoragePaths.h"
+#include "data/AppLog.h"
 #include "core/TimeUtil.h"
 
 #include <sqlite3.h>
@@ -8,6 +9,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
+#include <string>
 #include <stdexcept>
 
 using namespace pcat;
@@ -238,6 +241,25 @@ int main() {
         try { ioService.save(AppSettings{}); } catch (...) { threw=true; }
         assert(threw);
         assert(std::filesystem::is_directory(ioPath));
+    }
+
+    // Журнал: дописывание, уровни и ротация большого файла в *.1.
+    {
+        const auto logPath=dir/"app.log";
+        {std::ofstream big(logPath,std::ios::binary);big<<std::string(2048,'x');}
+        applog::open(logPath,1024);
+        assert(applog::isOpen());
+        assert(std::filesystem::exists(dir/"app.log.1"));
+        applog::info("старт");
+        applog::error("сбой");
+        applog::close();
+        assert(!applog::isOpen());
+        applog::info("после закрытия не пишется");
+        std::ifstream in(logPath,std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(in)),std::istreambuf_iterator<char>());
+        assert(text.find("INFO  старт")!=std::string::npos);
+        assert(text.find("ERROR сбой")!=std::string::npos);
+        assert(text.find("после закрытия")==std::string::npos);
     }
 
     std::filesystem::remove_all(dir,ec);

@@ -145,6 +145,14 @@ std::tm localTm(TimePoint point) {
     return time;
 }
 
+std::string formatLocalDateTime(TimePoint point) {
+    const auto time = localTm(point);
+    char buffer[80]{};
+    std::snprintf(buffer, sizeof(buffer), "%04d-%02d-%02d %02d:%02d:%02d", time.tm_year + 1900, time.tm_mon + 1, time.tm_mday,
+                  time.tm_hour, time.tm_min, time.tm_sec);
+    return buffer;
+}
+
 TimePoint fromLocalTm(std::tm time) {
     time.tm_isdst = -1;
     return std::chrono::system_clock::from_time_t(std::mktime(&time));

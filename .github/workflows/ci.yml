@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux (тесты + приложение)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build libsqlite3-dev
+
+      - name: Core tests (system SQLite)
+        run: |
+          cmake --preset core-tests-system-sqlite
+          cmake --build --preset core-tests
+          ctest --preset core-tests --output-on-failure
+
+      # Без X11/Wayland-заголовков: проект обязан собираться и с ограниченным Linux backend.
+      - name: Desktop app build (strict warnings, no X11)
+        run: |
+          cmake -S . -B build/ci-linux-app -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DPCAT_STRICT_WARNINGS=ON -DPCAT_BUILD_TESTS=OFF \
+            -DSDL_X11=OFF -DSDL_WAYLAND=OFF -DSDL_UNIX_CONSOLE_BUILD=ON
+          cmake --build build/ci-linux-app
+
+  windows:
+    name: Windows x64 (MinGW-w64 UCRT)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Тот же семейство toolchain, что и C:\tools\mingw64 (GCC + UCRT), но из MSYS2.
+      # Пресеты CMakePresets.json закреплены за C:\tools, поэтому здесь configure вызывается явно.
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+
+      - name: Configure
+        run: |
+          cmake -S . -B build/ci-windows -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DPCAT_STRICT_WARNINGS=ON -DPCAT_SQLITE_MODE=FETCH
+
+      - name: Build
+        run: cmake --build build/ci-windows
+
+      - name: Test
+        run: ctest --test-dir build/ci-windows --output-on-failure
+
+      - name: Collect runnable folder
+        run: |
+          mkdir -p build/ci-artifact
+          cp build/ci-windows/PcActivityTracker.exe build/ci-artifact/
+          find build/ci-windows -name SDL3.dll -exec cp {} build/ci-artifact/ \;
+          for dll in libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll; do cp "/ucrt64/bin/$dll" build/ci-artifact/; done
+          cp resources/portable/portable.txt resources/portable/README.txt build/ci-artifact/
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: PcActivityTracker-windows-x64
+          path: build/ci-artifact/
+          if-no-files-found: error

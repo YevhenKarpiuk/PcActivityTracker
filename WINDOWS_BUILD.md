@@ -185,7 +185,11 @@ CMake скачивает зафиксированные версии:
 ```text
 <каталог с exe>\data\activity_tracker.db
 <каталог с exe>\data\settings.json
+<каталог с exe>\data\PcActivityTracker.log   журнал запуска, автозапуска и ошибок
 ```
+
+Журнал дописывается; при старте файл больше 1 МБ переименовывается в `PcActivityTracker.log.1`.
+Если программа не появилась после входа в Windows, первым делом смотрите его.
 
 Порядок выбора:
 
@@ -196,6 +200,15 @@ CMake скачивает зафиксированные версии:
 
 Portable-архив содержит `portable.txt`, поэтому режим в нём зафиксирован явно и не зависит
 от прав на каталог.
+
+## 7a. CI
+
+`.github/workflows/ci.yml` на каждый PR и push в `main`:
+
+- Linux: `core-tests-system-sqlite` + сборка приложения с `PCAT_STRICT_WARNINGS=ON` без X11;
+- Windows: MSYS2 UCRT64 (GCC + UCRT, как `C:\tools\mingw64`), сборка, `ctest` и артефакт
+  `PcActivityTracker-windows-x64` с exe и DLL. Пресеты привязаны к `C:\tools`, поэтому CI
+  вызывает `cmake` напрямую. Приёмочной остаётся локальная `build_windows.cmd`.
 
 ## 8. Если сборка не прошла
 
@@ -212,5 +225,7 @@ build_windows.cmd > windows_build.log 2>&1
 - `git.exe not found in PATH` — установите Git for Windows;
 - ошибка загрузки SQLite amalgamation — используйте
   `-DPCAT_SQLITE_URL=<локальный zip>` или `-DPCAT_SQLITE_MODE=SYSTEM`;
+- папка проекта перенесена в другой каталог — устаревшие `build/<preset>/_deps/*-subbuild`
+  удаляются автоматически (`cmake/FetchContentRelocate.cmake`), исходники повторно не качаются;
 - `build_windows.cmd` должен оставаться в ASCII: `cmd.exe` читает `.cmd` в OEM-кодировке,
   и кириллица внутри батника ломает разбор строк.
