@@ -57,7 +57,11 @@ SQLite берётся из системы, если найден `find_package(S
 - чтение старых PascalCase-полей `settings.json`, включая `\\uXXXX` Unicode;
 - portable-режим через `portable.txt` / `data`;
 - Windows active window + idle-time + browser URL через UI Automation;
-- автозапуск Windows;
+- автозапуск Windows со стартом в трее (`--autostart`);
+- защита от второго экземпляра на одну базу (Windows — mutex, Linux/macOS — `flock`);
+- журнал `data/PcActivityTracker.log`;
+- время в «Истории» и «Сегодня» показывается в местном часовом поясе (хранение и экспорт — UTC);
+- CI на GitHub Actions: Linux-тесты и Windows-сборка MinGW UCRT;
 - SDL3 tray;
 - вкладки «Сегодня», «История», «Отчёты», «Настройки»;
 - экспорт истории CSV/JSON;
@@ -213,7 +217,8 @@ Linux/macOS не проходили приёмочную сборку и про�
 src/core       — мониторинг и общая логика
 src/data       — SQLite, settings, пути, экспорт
 src/reports    — ReportEngine и экспорт отчётов
-src/ui         — SDL3 + Dear ImGui + ImPlot
+src/ui         — SDL3 + Dear ImGui + ImPlot: App (окно, трей, цикл), TodayView, HistoryView,
+                 ReportView, SettingsView, ActivityDataCache
 src/platform   — узкие OS-specific backend'ы
 resources      — ресурсы executable
 assets         — иконки

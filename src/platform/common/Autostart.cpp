@@ -1,4 +1,3 @@
 #include "platform/Autostart.h"
-#if !defined(_WIN32) && !defined(__APPLE__) && !defined(__linux__)
-namespace pcat { bool setAutostart(bool,const std::filesystem::path&,std::string& error){error="Autostart is not supported on this platform";return false;} }
-#endif
+// Используется только на платформах без собственного backend (см. CMakeLists.txt).
+namespace pcat { AutostartResult setAutostart(bool enabled,const std::filesystem::path&,AutostartReason){if(!enabled)return {};return {false,"Autostart is not supported on this platform",{}};} }

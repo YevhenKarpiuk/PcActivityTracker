@@ -22,3 +22,4 @@ windows_build.log
 .DS_Store
 dist/
 dist/.stage/
+imgui.ini

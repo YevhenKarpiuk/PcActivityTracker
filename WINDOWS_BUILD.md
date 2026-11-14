@@ -163,7 +163,19 @@ CMake скачивает зафиксированные версии:
 - активное окно: Win32;
 - idle time: `GetLastInputInfo`;
 - browser URL: Windows UI Automation/COM;
-- автозапуск: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+- автозапуск: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, значение `PcActivityTracker`
+  = `"<путь>\PcActivityTracker.exe" --autostart`. С флагом `--autostart` окно не показывается,
+  программа сразу уходит в трей. Если автозапуск отключён в Диспетчере задач
+  (`...\Explorer\StartupApproved\Run`), при старте об этом пишется в статусной строке, а явное
+  сохранение настройки «Запускать вместе с системой» снимает запрет. Копия программы с выключенной
+  галочкой не удаляет запись, которая указывает на другую существующую копию;
+- один экземпляр на каталог данных: именованный mutex `Local\PcActivityTracker-<хеш каталога>`.
+  Повторный запуск не ведёт второй мониторинг в ту же базу, а показывает окно уже работающей копии.
+- выход из Windows/перезагрузка: SDL3 не обрабатывает `WM_ENDSESSION`, поэтому главное окно
+  подклассируется (`SetWindowSubclass`, `comctl32`) и текущий интервал дописывается до того,
+  как система завершит процесс. `WM_CLOSE` скрытому в трей окну (например, `taskkill` без `/F`)
+  завершает программу;
+- `imgui.ini` хранится в каталоге данных, а не в текущем каталоге процесса.
 
 В CMake для Windows подключены `user32`, `psapi`, `advapi32`, `ole32`, `oleaut32`, `uuid`.
 Заголовки `uiautomation.h` и GUID `CLSID_CUIAutomation`/`IID_IUIAutomation` присутствуют
@@ -178,7 +190,11 @@ CMake скачивает зафиксированные версии:
 ```text
 <каталог с exe>\data\activity_tracker.db
 <каталог с exe>\data\settings.json
+<каталог с exe>\data\PcActivityTracker.log   журнал запуска, автозапуска и ошибок
 ```
+
+Журнал дописывается; при старте файл больше 1 МБ переименовывается в `PcActivityTracker.log.1`.
+Если программа не появилась после входа в Windows, первым делом смотрите его.
 
 Порядок выбора:
 
@@ -189,6 +205,15 @@ CMake скачивает зафиксированные версии:
 
 Portable-архив содержит `portable.txt`, поэтому режим в нём зафиксирован явно и не зависит
 от прав на каталог.
+
+## 7a. CI
+
+`.github/workflows/ci.yml` на каждый PR и push в `main`:
+
+- Linux: `core-tests-system-sqlite` + сборка приложения с `PCAT_STRICT_WARNINGS=ON` без X11;
+- Windows: MSYS2 UCRT64 (GCC + UCRT, как `C:\tools\mingw64`), сборка, `ctest` и артефакт
+  `PcActivityTracker-windows-x64` с exe и DLL. Пресеты привязаны к `C:\tools`, поэтому CI
+  вызывает `cmake` напрямую. Приёмочной остаётся локальная `build_windows.cmd`.
 
 ## 8. Если сборка не прошла
 
@@ -205,5 +230,7 @@ build_windows.cmd > windows_build.log 2>&1
 - `git.exe not found in PATH` — установите Git for Windows;
 - ошибка загрузки SQLite amalgamation — используйте
   `-DPCAT_SQLITE_URL=<локальный zip>` или `-DPCAT_SQLITE_MODE=SYSTEM`;
+- папка проекта перенесена в другой каталог — устаревшие `build/<preset>/_deps/*-subbuild`
+  удаляются автоматически (`cmake/FetchContentRelocate.cmake`), исходники повторно не качаются;
 - `build_windows.cmd` должен оставаться в ASCII: `cmd.exe` читает `.cmd` в OEM-кодировке,
   и кириллица внутри батника ломает разбор строк.

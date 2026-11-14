@@ -12,6 +12,9 @@ option(PCAT_BUILD_TESTS "Build unit tests" ON)
 option(PCAT_FETCH_DEPS "Fetch GUI dependencies with CMake" ON)
 option(PCAT_STRICT_WARNINGS "Treat warnings in PcActivityTracker sources as errors" OFF)
 
+# Должно выполниться до первого FetchContent (SQLite3.cmake, Dependencies.cmake).
+include(cmake/FetchContentRelocate.cmake)
+
 # Тесты построены на assert(), а Release определяет NDEBUG и вырезает их целиком.
 # Без этого ctest в Release-пресете рапортует об успехе, фактически ничего не проверив.
 function(pcat_enable_assertions target)
@@ -38,6 +41,7 @@ endfunction()
 
 add_library(pcat_core
     src/core/ActivityMonitor.cpp
+    src/core/AutostartCommand.cpp
     src/core/BrowserAddress.cpp
     src/core/CategoryResolver.cpp
     src/core/ExclusionMatcher.cpp
@@ -59,6 +63,7 @@ pcat_target_warnings(pcat_reports)
 if(PCAT_BUILD_DATA)
     include(cmake/SQLite3.cmake)
     add_library(pcat_data
+        src/data/AppLog.cpp
         src/data/AppStoragePaths.cpp
         src/data/ActivityRepository.cpp
         src/data/ActivityExporter.cpp
@@ -76,14 +81,14 @@ if(PCAT_BUILD_APP)
     include(cmake/Dependencies.cmake)
 
     if(WIN32)
-        set(PCAT_PLATFORM_SRC src/platform/windows/WindowsActivityProvider.cpp src/platform/windows/Autostart.cpp)
+        set(PCAT_PLATFORM_SRC src/platform/windows/WindowsActivityProvider.cpp src/platform/windows/Autostart.cpp src/platform/windows/SingleInstance.cpp src/platform/windows/SessionEnd.cpp)
     elseif(APPLE)
         enable_language(OBJCXX)
-        set(PCAT_PLATFORM_SRC src/platform/macos/MacActivityProvider.mm src/platform/macos/Autostart.cpp)
+        set(PCAT_PLATFORM_SRC src/platform/macos/MacActivityProvider.mm src/platform/macos/Autostart.cpp src/platform/posix/SingleInstance.cpp src/platform/common/SessionEnd.cpp)
     elseif(UNIX)
-        set(PCAT_PLATFORM_SRC src/platform/linux/LinuxActivityProvider.cpp src/platform/linux/Autostart.cpp)
+        set(PCAT_PLATFORM_SRC src/platform/linux/LinuxActivityProvider.cpp src/platform/linux/Autostart.cpp src/platform/posix/SingleInstance.cpp src/platform/common/SessionEnd.cpp)
     else()
-        set(PCAT_PLATFORM_SRC src/platform/common/NullActivityProvider.cpp src/platform/common/Autostart.cpp)
+        set(PCAT_PLATFORM_SRC src/platform/common/NullActivityProvider.cpp src/platform/common/Autostart.cpp src/platform/common/SingleInstance.cpp src/platform/common/SessionEnd.cpp)
     endif()
 
     add_library(pcat_platform ${PCAT_PLATFORM_SRC})
@@ -91,7 +96,7 @@ if(PCAT_BUILD_APP)
     target_link_libraries(pcat_platform PUBLIC pcat_core)
     if(WIN32)
         target_compile_definitions(pcat_platform PRIVATE WINVER=0x0A00 _WIN32_WINNT=0x0A00 UNICODE _UNICODE)
-        target_link_libraries(pcat_platform PRIVATE user32 psapi advapi32 ole32 oleaut32 uuid)
+        target_link_libraries(pcat_platform PRIVATE user32 comctl32 psapi advapi32 ole32 oleaut32 uuid)
     elseif(APPLE)
         find_library(APPKIT_FRAMEWORK AppKit REQUIRED)
         find_library(APPSERVICES_FRAMEWORK ApplicationServices REQUIRED)
@@ -112,9 +117,14 @@ if(PCAT_BUILD_APP)
 
     set(PCAT_APP_SOURCES
         src/main.cpp
+        src/ui/ActivityDataCache.cpp
         src/ui/App.cpp
+        src/ui/HistoryView.cpp
         src/ui/ReportView.cpp
+        src/ui/SettingsView.cpp
+        src/ui/TodayView.cpp
         src/ui/TrayIcon.cpp
+        src/ui/UiCommon.cpp
     )
     # Единственный источник правды для идентификатора иконки: подставляется и в .rc,
     # и в C++, который забирает её через LoadImage для окна и трея.

@@ -17,6 +17,7 @@ PcActivityTracker — portable-версия для Windows x64
 
     data\activity_tracker.db    история активности (SQLite)
     data\settings.json          настройки
+    data\PcActivityTracker.log  журнал запуска и ошибок
 
 Экспорт истории и отчётов (history.csv, history.json, report.csv, report.json)
 складывается туда же. Полный путь показывается в статусной строке приложения.
