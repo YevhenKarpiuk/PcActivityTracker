@@ -7,6 +7,7 @@
 #include "data/SettingsService.h"
 #include "platform/Autostart.h"
 #include "platform/Factory.h"
+#include "platform/SessionEnd.h"
 #include "platform/SingleInstance.h"
 #include "ui/ActivityDataCache.h"
 #include "ui/HistoryView.h"
@@ -254,8 +255,20 @@ int runApp(const std::filesystem::path& executablePath, const AppLaunchOptions& 
     SdlPtr<SDL_Renderer> renderer(SDL_CreateRenderer(window.get(), nullptr));
     if (!renderer) throw std::runtime_error(std::string("Cannot create SDL renderer: ") + SDL_GetError());
     SDL_SetRenderVSync(renderer.get(), 1);
+    // imgui.ini по умолчанию пишется в текущий каталог процесса, а у GUI-приложения это
+    // случайное место (при автозапуске — C:\Windows\System32). Держим его в каталоге данных.
+    // Строка объявлена до ImGuiSession: ImGui сохраняет ini при уничтожении контекста.
+    const std::string imguiIni = pathUtf8(dataDir / "imgui.ini");
     ImGuiSession imgui(window.get(), renderer.get());
+    ImGui::GetIO().IniFilename = imguiIni.c_str();
     loadUiFont();
+
+    // Выход из Windows / выключение: дописать текущий интервал, пока процесс ещё жив.
+    const SessionEndWatcher sessionEnd(
+        SDL_GetPointerProperty(SDL_GetWindowProperties(window.get()), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr), [&monitor] {
+            applog::info("Завершение сеанса ОС: сохраняю текущий интервал");
+            monitor.stop();
+        });
 
     try {
         data.reload(monitor);
@@ -292,7 +305,10 @@ int runApp(const std::filesystem::path& executablePath, const AppLaunchOptions& 
             ImGui_ImplSDL3_ProcessEvent(&event);
             if (event.type == SDL_EVENT_QUIT) done = true;
             if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(window.get())) {
-                if (tray) SDL_HideWindow(window.get());
+                // Скрытое окно пользователь закрыть не может: WM_CLOSE ему шлёт система или
+                // taskkill без /F. Это просьба завершиться, а не свернуть окно ещё раз.
+                const bool hidden = (SDL_GetWindowFlags(window.get()) & SDL_WINDOW_HIDDEN) != 0;
+                if (tray && !hidden) SDL_HideWindow(window.get());
                 else done = true;
             }
         }
