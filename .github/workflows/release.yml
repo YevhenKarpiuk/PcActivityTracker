@@ -1,0 +1,90 @@
+name: Release
+
+# Публикация релиза: Actions → Release → Run workflow, указать тег (например v0.3.0).
+# Тег должен совпадать с project(VERSION ...) в CMakeLists.txt; описание берётся из
+# .github/release-notes/<тег>.md. Тег создаётся на коммите, с которого запущен workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Тег релиза, например v0.3.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows-portable:
+    name: Windows x64 portable
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            zip
+
+      - name: Check tag, version and notes
+        run: |
+          tag='${{ inputs.tag }}'
+          version=$(sed -n 's/^project(PcActivityTrackerCpp VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          if [ "$tag" != "v$version" ]; then echo "Tag $tag does not match CMake version $version"; exit 1; fi
+          test -f ".github/release-notes/$tag.md" || { echo "Missing .github/release-notes/$tag.md"; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Configure
+        run: |
+          cmake -S . -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DPCAT_STRICT_WARNINGS=ON -DPCAT_SQLITE_MODE=FETCH
+
+      - name: Build
+        run: cmake --build build/release
+
+      - name: Test
+        run: ctest --test-dir build/release --output-on-failure
+
+      # Тот же состав, что у package_portable.cmd.
+      - name: Package
+        run: |
+          name="PcActivityTracker-${VERSION}-win-x64-portable"
+          stage="dist/$name"
+          mkdir -p "$stage"
+          cp build/release/PcActivityTracker.exe "$stage/"
+          find build/release -name SDL3.dll -exec cp {} "$stage/" \;
+          for dll in libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll; do cp "/ucrt64/bin/$dll" "$stage/"; done
+          cp resources/portable/portable.txt resources/portable/README.txt "$stage/"
+          # Самопроверка: exe не должен требовать DLL, которых нет в архиве.
+          deps=$(objdump -p "$stage/PcActivityTracker.exe" | sed -n 's/^\s*DLL Name: //p')
+          echo "Imports: $deps"
+          for dll in $deps; do
+            lower="${dll,,}"
+            case "$lower" in
+              sdl3.dll|libgcc_s_seh-1.dll|libstdc++-6.dll|libwinpthread-1.dll|api-ms-win-*) ;;
+              *) if [ ! -f "/c/Windows/System32/$dll" ]; then echo "Unexpected dependency: $dll"; exit 1; fi ;;
+            esac
+          done
+          (cd dist && zip -r -9 "$name.zip" "$name" && sha256sum "$name.zip" > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+          echo "ZIP=dist/$name.zip" >> "$GITHUB_ENV"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: PcActivityTracker ${{ env.VERSION }} — C++ portable для Windows x64
+          body_path: .github/release-notes/${{ inputs.tag }}.md
+          files: |
+            ${{ env.ZIP }}
+            dist/SHA256SUMS.txt
+          fail_on_unmatched_files: true
+          make_latest: true
